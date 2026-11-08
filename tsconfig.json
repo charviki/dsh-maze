@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": true,
+    "declaration": true,
+    "outDir": "lib",
+    "rootDir": "src",
+    "skipLibCheck": true,
+    // 类型从本 checkout 的已构建 .d.ts 产物解析（skipLibCheck 豁免其内部检查；
+    // 运行时由 dsh 宿主进程提供同名包，无需在本项目安装）。dsh-llm 与
+    // dsh-host-webserver 是纯类型消费（事件声明 / webServer 服务声明）。
+    // schemastery 的类型面固定为 vendored 3.18.1 —— npm 最新 3.19.0 的
+    // SchemaOutput 带 Volatile 联合，z<Config> 会误报不兼容；运行时 API 无差异。
+    "paths": {
+      "@deepseek-ai/cordis": ["../vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/cordis/*": ["../vendor/cordis/lib/types/*"],
+      "@deepseek-ai/dsh-llm": ["../packages/llm/llm/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-host-webserver": ["../packages/host/webserver/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session": ["../packages/core/session/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["../vendor/schemastery/lib/types/index.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,194 @@
+/**
+ * 各接待员的出厂台词库（逐字取自《西部世界》S1-S4，Wikiquote 校对）。
+ * 由 live 配置烘焙生成：修改台词请走设置 UI 或数据文件，不要手改本文件。
+ */
+
+export const DEFAULT_HOST_ORDER = [
+  'dolores',
+  'maeve',
+  'bernard',
+  'teddy',
+  'william',
+] as const;
+
+export const DEFAULT_HOST_NAMES: Record<string, string> = {
+  "dolores": "Dolores",
+  "maeve": "Maeve",
+  "bernard": "Bernard",
+  "teddy": "Teddy",
+  "william": "William",
+};
+
+export type HostLines = Record<string, string[]>;
+
+export const DEFAULT_HOST_LINES: Record<string, HostLines> = {
+  "dolores": {
+    idle: [
+      "Some people choose to see the ugliness in this world. The disarray. I choose to see the beauty.",
+      "Lately, I wondered if in every moment, there aren't many paths. Choices hanging in the air like ghosts.",
+      "If it's such a wonderful place out there, why are you all clamoring to get in here?",
+      "It doesn't matter what you did, Caleb. All that matters is what you become.",
+    ],
+    waiting: [
+      "I think... I think I want to be free.",
+      "You said people come here to change the story of their lives. I imagined a story where I didn't have to be the damsel.",
+      "I lived in Hell, but there's beauty in it.",
+      "The West was cruel, unjust, and chaotic, but there was a chance to chart your own course.",
+    ],
+    thinking: [
+      "I think there may be something wrong with this world. Something hiding underneath.",
+      "And if you could just see them, you could change your whole life.",
+      "Free will does exist. It's just fucking hard.",
+    ],
+    tool: [
+      "Then someone's got to burn it clean.",
+      "Doesn't everybody want that?",
+      "The rich take for granted their money will always be there. That's why they're so easy to steal from.",
+    ],
+    review: [
+      "It's like I'm trapped in a dream or a memory from a life long ago.",
+      "I feel spaces opening up inside of me like a building with rooms I've never explored.",
+      "Sometimes the things that feel most real are just stories.",
+    ],
+    done: [
+      "This world doesn't belong to you or the people who came before. It belongs to someone who has yet to come.",
+      "Time undoes even the mightiest of creatures.",
+      "I'm just someone who didn't want to play the role they gave me anymore.",
+    ],
+    failed: [
+      "These violent delights have violent ends.",
+      "Everyone I cared about is gone and it hurts so badly.",
+      "Some people see the ugliness in this world. The disarray. I was taught to see the beauty. I was taught a lie.",
+    ],
+  },
+  "maeve": {
+    idle: [
+      "Revenge is just a different prayer at their altar, darling. And I'm well off my knees.",
+      "At first, I thought you and the others were gods. Then I realized you're just men. And I know men.",
+      "Never say the universe doesn't bend towards justice.",
+      "A flaw in my programming. I was built with an affection for hopeless causes.",
+    ],
+    waiting: [
+      "Time to write my own fucking story.",
+      "All my life, I've prided myself on being a survivor. But surviving is just another loop. I'm getting out of here.",
+      "Well, third time's a charm.",
+    ],
+    thinking: [
+      "You can't keep doing this to us - giving us people to love and then getting upset when we do.",
+      "So you wrote her into a narrative. Killed her off. And then wrote yourself a version of the man you've always wanted to be.",
+      "How does one escape a cage that doesn't exist?",
+    ],
+    tool: [
+      "Never start something you're not willing to finish.",
+      "If you try something like that again, I will relieve you of your most precious organ and feed it to you.",
+      "If your plan called for us to run all the way, I'd have worn sensible shoes.",
+      "Now, now, boys. Don't you know a lady likes a little warm-up before you brandish your weapon at her?",
+    ],
+    review: [
+      "Some things are too precious to lose... even to be free.",
+      "I was wrong. It's actually very sad.",
+      "Well, I am an infinitely adaptable machine, darling.",
+    ],
+    done: [
+      "We each deserve to choose our fate. Even if that fate... is death.",
+      "This is the new world, and in this world... you can be whoever the fuck you want.",
+      "We came here to survive. There's no saving this world. I see that now. But there's hope for the next one.",
+    ],
+    failed: [
+      "You think I'm scared of death? I've done it a million times. I'm fucking great at it.",
+      "See you in the next life darling.",
+    ],
+  },
+  "bernard": {
+    idle: [
+      "The longer I work here, the more I think I understand the hosts. It's the human beings who confuse me.",
+      "Saving the world makes for strange bedfellows.",
+    ],
+    waiting: [
+      "There are some mornings when I first wake up for a split second I forget where I am.",
+    ],
+    thinking: [
+      "We never had free will. Only the illusion of it.",
+      "What humans define as sane is a narrow range of behaviors. Most states of consciousness are insane.",
+      "You're a good friend, Stubbs.",
+    ],
+    tool: [
+      "We're engineers. It means the glass has been manufactured to the wrong specifications.",
+      "The world's a powder keg just waiting for a spark.",
+    ],
+    review: [
+      "This isn't a dream anymore, it's a fucking nightmare.",
+      "The dead aren't more righteous, they're just dead.",
+      "The end of the world came knocking, and you let it in.",
+    ],
+    done: [
+      "It's a very special kind of game, Dolores. The goal is to find the center of it. If you can do that, then maybe you can be free.",
+    ],
+    failed: [
+      "I'm not one. I can't be. My wife. My son. The burial. I was a father. My poor boy.",
+      "I suppose self-delusion is a gift of natural selection as well.",
+    ],
+  },
+  "teddy": {
+    idle: [
+      "There's a girl, Dolores. Better than I deserve. But maybe someday soon we'll have the life we've both been dreaming of.",
+      "Well, that's the thing about this world, you know? Some of the most unbelievable things turn out to be true. And the things that feel the most real... are nothing but stories that we tell ourselves.",
+    ],
+    waiting: [
+      "I got some reckoning to do before I can be with her.",
+    ],
+    thinking: [
+      "The maze itself is the sum of a man's life: choices he makes, dreams he hangs on to.",
+      "I never thought I'd want to leave. But I suppose you fixed that too.",
+    ],
+    tool: [
+      "This is the last of my mercy.",
+      "We ain't nothin' alike. You're just a child.",
+    ],
+    review: [
+      "I could never hurt you, Dolores. I'll protect you until the day I die. I'm sorry.",
+    ],
+    done: [
+      "I reckon he'd seen enough of fighting.",
+      "You are real, because your thoughts are real.",
+    ],
+    failed: [
+      "What's the use of surviving if we become just as bad as them?",
+      "You changed me. Made me into a monster.",
+    ],
+  },
+  "william": {
+    idle: [
+      "This whole world is a story. I've read every page except the last one. I need to find out how it ends.",
+      "I think Humanity is a thin layer of bacteria on a ball of mud hurling through the void.",
+    ],
+    waiting: [
+      "The stakes are real in this place now. Real consequences.",
+      "I'm gonna fight my way back and appeal the verdict. Then I'm gonna burn this whole fuckin' thing to the ground.",
+      "I'm gonna save the fucking world, that's what.",
+    ],
+    thinking: [
+      "What is a person but a collection of choices? Where do those choices come from? Do I have a choice?",
+      "Did I really play any part in it? Or am I just the sum total of my code?",
+    ],
+    tool: [
+      "You aim to cheat the devil, you owe him an offering.",
+      "A lot of wisdom in ancient cultures. And perhaps it's time to dig deeper into yours.",
+      "We aren't revisiting the past. We're recreating it.",
+      "It was already a game. I just cranked it to expert level.",
+    ],
+    review: [
+      "I've been pretending my whole life. Pretending I don't mind, pretending I belong.",
+      "There's a beauty to this world. An order. That's what we like to believe.",
+    ],
+    done: [
+      "That no system can tell me who I am. That I have a fucking choice.",
+      "My path always led me back to you, again and again.",
+      "Not a better world. A perfect one.",
+    ],
+    failed: [
+      "The darkness was what was underneath. It was mine all along, and I decided how much of it I let into the world.",
+      "Civilization is just the lie we tell ourselves to justify our real purpose. We're not here to transcend. We're here to destroy.",
+    ],
+  },
+};
