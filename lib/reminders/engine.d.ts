@@ -18,8 +18,6 @@ export interface RuleDef {
     readonly trigger: Trigger;
     /** cron 触发源必填：5 字段表达式（分 时 日 月 周） */
     readonly schedule?: string;
-    /** model-call 条件：`provider/model` 通配匹配，默认 '*' */
-    readonly modelPattern?: string;
     /** model-call 条件：生效时段 [startHour, endHour)，默认全天 */
     readonly startHour?: number;
     readonly endHour?: number;
@@ -33,6 +31,9 @@ export interface RuleDef {
     readonly when?: string;
     /** model-call 条件：限定星期（0=周日..6=周六，JS getDay 语义；缺省=每天） */
     readonly daysOfWeek?: readonly number[];
+    /** model-call 条件：模型匹配正则源串（对 `provider/model` 复合串测试，i 标志大小写
+     *  不敏感）。缺省/空串 = 匹配一切。排除用负向断言：`^(?!.*glm)` = 非智谱才提醒 */
+    readonly modelPattern?: string;
 }
 /** 运行时状态。字段一律追加到末尾（遵循"追末尾"约定） */
 export interface RuleState {
@@ -73,8 +74,14 @@ export interface HistoryEntry {
 export type WhenFn = (use: ModelUse | null, hour: number, minute: number, dow: number) => boolean;
 /** 本地日期键（跨日重置频控用），格式 'YYYY-MM-DD' */
 export declare function localDateKey(at: number): string;
-/** 通配匹配：'*' 分段，段间子串匹配（大小写不敏感），如 '*glm*' 匹配 'zai/glm-5.3' */
-export declare function wildcardMatch(pattern: string, value: string): boolean;
+/** 旧匹配字段迁移（通配/exclude 时代 → 正则-only），在 validateRule 之前跑：
+ *  - 带 patternMode/excludeModelPattern 旧键：pattern 不是合法正则（如 '*glm*'）→ 按通配
+ *    语义转换，是合法正则则原样保留；exclude 合成为串首负向断言（与旧排除门
+ *    "子串命中即拒绝"语义一致）：'*' + exclude '*glm*' → `^(?!.*glm)`
+ *  - 不带旧键的新格式：合法正则原样返回；含 '*' 且编译失败的（pre-模式时代的
+ *    通配数据，如裸 '*glm*'）同样按通配转换；不含 '*' 的编译失败原样保留，
+ *    交给 validateRule 带字段名报错（新格式的正则笔误要 fail-loud，不能静默转义） */
+export declare function migrateRuleInput(raw: Record<string, unknown>): Record<string, unknown>;
 /** 消息模板渲染：{model}/{provider} 占位替换 */
 export declare function renderMessage(template: string, use: ModelUse | null): string;
 /**

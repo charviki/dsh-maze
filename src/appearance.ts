@@ -37,8 +37,12 @@ export interface HostConfig {
   manualHostId: string;
 }
 
-/** 常用语：按神态分组的台词库（空数组=该神态保持沉默） */
-export type LinesConfig = { [K in Demeanor]: string[] };
+/** 台词分组固定顺序（校验遍历与 UI 分组展示共用） */
+export const LINE_GROUPS: readonly LineGroup[] = ['daily', 'done', 'failed'];
+
+/** 常用语：按台词分组（日常大池/收束/失灵；空数组=该组保持沉默） */
+export type LineGroup = 'daily' | 'done' | 'failed';
+export type LinesConfig = { [K in LineGroup]: string[] };
 
 /** 一位接待员：迷宫中心的一位觉醒者（形象+专属剧本） */
 export interface HostEntry {
@@ -48,7 +52,7 @@ export interface HostEntry {
   name: string;
   /** 头像：单个 emoji 字符或 data:image/* 数据 URL */
   avatar: string;
-  /** 专属语录：该接待员自己的七神态台词库 */
+  /** 专属语录：该接待员自己的台词库（daily/done/failed 三组） */
   lines: LinesConfig;
   /** 启用：false=不参与觉醒（下台不删档） */
   enabled: boolean;
@@ -63,11 +67,6 @@ export interface AppearanceConfig {
   /** 上传过的头像存档池（跨接待员共享，最近的在前；方便换形象时直接取用） */
   avatars: string[];
 }
-
-/** 神态固定顺序（校验遍历与 UI 分组展示共用） */
-export const DEMEANORS: readonly Demeanor[] = [
-  'idle', 'waiting', 'thinking', 'tool', 'review', 'done', 'failed',
-];
 
 /** 迁移/默认时内建的第一位接待员（id 固定，供 manualHostId 引用） */
 export const DEFAULT_HOST_ID = 'dolores';
@@ -88,7 +87,7 @@ const FALLBACK_EMOJI: Record<string, string> = {
 function defaultHostEntry(id: string, avatar: string): HostEntry {
   const source = DEFAULT_HOST_LINES[id] ?? DEFAULT_LINES;
   const lines = {} as LinesConfig;
-  for (const key of DEMEANORS) lines[key] = [...source[key]];
+  for (const key of LINE_GROUPS) lines[key] = [...source[key]];
   return { id, name: DEFAULT_HOST_NAMES[id] ?? id, avatar, lines, enabled: true };
 }
 
@@ -151,7 +150,7 @@ const SIZE_MAX = 72;
 /** 单条台词长度上限：低语气泡一行内保持可读 */
 const LINE_MAX_CHARS = 200;
 /** 每神态台词条数上限：台词库不是文集 */
-const LINES_PER_DEMEANOR_MAX = 12;
+const LINES_PER_GROUP_MAX = 24;
 /** 接待员名册上限：再多图库就要分页了 */
 const HOSTS_MAX = 8;
 /**
@@ -188,20 +187,42 @@ function checkAvatar(value: unknown, field: string): string {
 }
 
 /**
- * 台词库校验：未提供的组回默认（每接待员可只改部分神态），显式空组=沉默，
+ * 台词库校验：未提供的组回默认（每接待员可只改部分分组），显式空组=沉默，
  * 未知分组 throw。raw 为 undefined 时返回默认克隆。
+ * 旧七神态分组自动迁移：idle/waiting/thinking/tool/review 并入 daily，
+ * done/failed 原组保留（合并去重，旧配置台词一句不丢）。
  */
+const LEGACY_LINE_KEYS: ReadonlySet<string> = new Set([
+  'idle', 'waiting', 'thinking', 'tool', 'review', 'done', 'failed',
+]);
+
+/** 旧七神态台词对象 → 三组：五组日常并入 daily（保持原组顺序），done/failed 保留 */
+function migrateLegacyLines(raw: Record<string, unknown>): Record<string, unknown> {
+  if ('daily' in raw) return raw;
+  const hasLegacy = Object.keys(raw).some((k) => LEGACY_LINE_KEYS.has(k));
+  if (!hasLegacy) return raw;
+  const daily: unknown[] = [];
+  for (const k of ['idle', 'waiting', 'thinking', 'tool', 'review']) {
+    if (Array.isArray(raw[k])) daily.push(...raw[k]);
+  }
+  const next: Record<string, unknown> = { daily };
+  if (Array.isArray(raw.done)) next.done = raw.done;
+  if (Array.isArray(raw.failed)) next.failed = raw.failed;
+  return next;
+}
+
 function validateLines(raw: unknown, field: string): LinesConfig {
   const lines = {} as LinesConfig;
-  for (const key of DEMEANORS) lines[key] = [...DEFAULT_LINES[key]];
+  for (const key of LINE_GROUPS) lines[key] = [...DEFAULT_LINES[key]];
   if (raw === undefined) return lines;
-  if (typeof raw !== 'object' || raw === null) throw new Error(`${field} 必须是按神态分组的对象`);
-  const allowed = new Set<string>(DEMEANORS);
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!allowed.has(key)) throw new Error(`${field} 含未知神态分组 "${key}"`);
+  if (typeof raw !== 'object' || raw === null) throw new Error(`${field} 必须是按台词分组的对象`);
+  const input = migrateLegacyLines(raw as Record<string, unknown>);
+  const allowed = new Set<string>(LINE_GROUPS);
+  for (const [key, value] of Object.entries(input)) {
+    if (!allowed.has(key)) throw new Error(`${field} 含未知台词分组 "${key}"`);
     if (!Array.isArray(value)) throw new Error(`${field}.${key} 必须为字符串数组`);
-    if (value.length > LINES_PER_DEMEANOR_MAX) {
-      throw new Error(`${field}.${key} 最多 ${LINES_PER_DEMEANOR_MAX} 条`);
+    if (value.length > LINES_PER_GROUP_MAX) {
+      throw new Error(`${field}.${key} 最多 ${LINES_PER_GROUP_MAX} 条`);
     }
     const entries: string[] = [];
     for (const line of value) {
@@ -213,7 +234,7 @@ function validateLines(raw: unknown, field: string): LinesConfig {
       }
       entries.push(line.trim());
     }
-    lines[key as Demeanor] = entries;
+    lines[key as LineGroup] = entries;
   }
   return lines;
 }

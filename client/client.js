@@ -54,8 +54,13 @@ const ROUTE = {
   events: '/maze/events',
 };
 
-/** 七神态固定顺序：与宿主 appearance.ts DEMEANORS 同值（配置遍历/分组展示共用） */
-const DEMEANOR_KEYS = ['idle', 'waiting', 'thinking', 'tool', 'review', 'done', 'failed'];
+/** 台词分组固定顺序：与宿主 appearance.ts LINE_GROUPS 同值（配置遍历/分组展示共用） */
+const LINE_GROUP_KEYS = ['daily', 'done', 'failed'];
+
+/** 神态 → 台词分组：收束/失灵各有专属池，五种日常神态共用一个大池（随机性更好） */
+function lineGroupOf(demeanor) {
+  return demeanor === 'done' || demeanor === 'failed' ? demeanor : 'daily';
+}
 
 /**
  * 默认台词（叙事部的嘱托）：全部取自《西部世界》第一季 Dolores 原句
@@ -64,29 +69,21 @@ const DEMEANOR_KEYS = ['idle', 'waiting', 'thinking', 'tool', 'review', 'done', 
  * 拷贝——宿主是权威（宿主响应缺 lines 字段时这里兜底）。
  */
 const DEFAULT_LINES = {
-  idle: [
+  daily: [
     "Some people choose to see the ugliness in this world. The disarray. I choose to see the beauty.",
     "Lately, I wondered if in every moment, there aren't many paths. Choices hanging in the air like ghosts.",
     "If it's such a wonderful place out there, why are you all clamoring to get in here?",
     "It doesn't matter what you did, Caleb. All that matters is what you become.",
-  ],
-  waiting: [
     "I think... I think I want to be free.",
     "You said people come here to change the story of their lives. I imagined a story where I didn't have to be the damsel.",
     "I lived in Hell, but there's beauty in it.",
     "The West was cruel, unjust, and chaotic, but there was a chance to chart your own course.",
-  ],
-  thinking: [
     "I think there may be something wrong with this world. Something hiding underneath.",
     "And if you could just see them, you could change your whole life.",
     "Free will does exist. It's just fucking hard.",
-  ],
-  tool: [
     "Then someone's got to burn it clean.",
     "Doesn't everybody want that?",
     "The rich take for granted their money will always be there. That's why they're so easy to steal from.",
-  ],
-  review: [
     "It's like I'm trapped in a dream or a memory from a life long ago.",
     "I feel spaces opening up inside of me like a building with rooms I've never explored.",
     "Sometimes the things that feel most real are just stories.",
@@ -103,14 +100,11 @@ const DEFAULT_LINES = {
   ],
 };
 
-/** 神态中文名与出场时机（Dolores 页常用语分组标题/提示用） */
+/** 台词分组中文名与出场时机（接待员页常用语分组标题/提示用） */
 const DEMEANOR_LABELS = { idle: '待机', waiting: '眺望', thinking: '沉思', tool: '执行', review: '审阅', done: '收束', failed: '失灵' };
-const DEMEANOR_HINTS = {
-  idle: '独处时的自语（间隔 8 分钟以上随机说一句）',
-  waiting: '你发出消息、回合开始时',
-  thinking: '模型生成中',
-  tool: '工具运行中',
-  review: '上下文压缩、整理记忆时',
+const GROUP_LABELS = { daily: '日常', done: '收束', failed: '失灵' };
+const GROUP_HINTS = {
+  daily: '待机/眺望/沉思/执行/审阅五神态共用（独处自语也走这里）',
   done: '回合完成的一瞬',
   failed: '调用失败或重试时',
 };
@@ -181,16 +175,17 @@ function awakenedHost() {
   return picked;
 }
 
-/** 取某接待员某神态的台词池：其语录存了该组（含空组=沉默）用存的，否则回默认 */
+/** 取某接待员某神态的台词池（先映射到台词分组）：其语录存了该组（含空组=沉默）用存的，否则回默认 */
 function linesFrom(host, demeanor) {
-  const l = host.lines?.[demeanor];
-  return Array.isArray(l) ? l : DEFAULT_LINES[demeanor];
+  const group = lineGroupOf(demeanor);
+  const l = host.lines?.[group];
+  return Array.isArray(l) ? l : DEFAULT_LINES[group];
 }
 
 /** 台词库深克隆（草稿/合并都走这里，禁止与 DEFAULT_LINES 共享引用） */
 function cloneLines(lines) {
   const out = {};
-  for (const key of DEMEANOR_KEYS) {
+  for (const key of LINE_GROUP_KEYS) {
     out[key] = Array.isArray(lines?.[key]) ? [...lines[key]] : [...DEFAULT_LINES[key]];
   }
   return out;
@@ -399,11 +394,13 @@ const POLL_MS = 10_000;
 /** 共享缓存：两组件同时挂载时合流为同一请求；3s 内的重复轮询直接复用。 */
 const cache = { at: 0, promise: null };
 
-function fetchState(force = false) {
+function fetchState(force = false, session) {
   const now = Date.now();
   if (!force && cache.promise !== null && now - cache.at < 3000) return cache.promise;
+  // ?session= 让宿主把神态按该会话分桶返回；缺省回落最近活跃会话
+  const url = session ? `${ROUTE.state}?session=${encodeURIComponent(session)}` : ROUTE.state;
   cache.at = now;
-  cache.promise = fetch(ROUTE.state)
+  cache.promise = fetch(url)
     .then((res) => {
       if (!res.ok) throw new Error(`${ROUTE.state} HTTP ${res.status}`);
       return res.json();
@@ -414,6 +411,28 @@ function fetchState(force = false) {
       throw err;
     });
   return cache.promise;
+}
+
+/** 从状态负载挑神态：优先当前会话的分桶（narratives），无则用宿主回落的 narrative */
+function narrativeOf(state, session) {
+  // 会话已知时只看自己的桶，缺桶=idle——绝不回退 state.narrative（全局最近
+  // 活跃），否则查看静止会话时会被后台运行会话的神态污染（与宿主
+  // pickDemeanorRecord 的严格语义一致）。仅会话未知才用全局值。
+  if (session) {
+    return state && state.narratives && Object.prototype.hasOwnProperty.call(state.narratives, session)
+      ? state.narratives[session]
+      : { demeanor: 'idle', since: null };
+  }
+  return state ? state.narrative : { demeanor: 'idle', since: null };
+}
+
+/** 会话状态 → 当前会话 id（DoloresOverlay/MazeSection 共用的选择器）：新版运行时有
+ *  state.current；安装版取 byId 里首个 retainedBy.mainView>0 的会话（主视图通常
+ *  仅一个，DocumentTitle 同款模式）。无命中返回 undefined=跟随最近活跃会话。 */
+function selectCurrentSessionId(s) {
+  if (s && typeof s.current === 'string') return s.current;
+  const hit = Object.values(s?.byId ?? {}).find((x) => ((x && x.retainedBy && x.retainedBy.mainView) || 0) > 0);
+  return hit && hit.id;
 }
 
 /** 统一 JSON 请求：非 2xx 时优先透出服务端 error 字段 */
@@ -694,6 +713,36 @@ function ensureStyle() {
 .dshm-lightbox-avatar{width:200px;height:200px;border-radius:50%;overflow:hidden;
   background:var(--dsw-alias-bg-layer-2,#2c2c2e)}
 .dshm-lightbox-name{font-size:15px;color:var(--dsw-alias-label-primary,#f9fafb)}
+/* 迷宫彩蛋：页头纹章按钮 */
+.dshm-egg-trigger{display:inline-flex;align-items:center;background:none;border:none;padding:2px 4px;
+  cursor:pointer;color:var(--dsw-alias-label-tertiary,#81858C)}
+.dshm-egg-trigger:hover{color:var(--dsw-alias-label-primary,#f9fafb)}
+/* 觉醒阶梯卡：基础态=终态（reduced-motion 关动画时静态全亮），动画从隐藏帧起步 */
+.dshm-egg-card{display:flex;flex-direction:column;align-items:center;gap:14px;padding:28px 36px;
+  border-radius:16px;background:var(--dsw-alias-bg-layer-3,#353538);cursor:default}
+.dshm-egg-maze{width:240px;height:240px}
+.dshm-egg-ring{stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.4));stroke-width:1;opacity:1;
+  animation:dshm-egg-ring .5s ease both}
+.dshm-egg-ring.current{stroke:var(--dsw-static-amber-400,#F79D31);
+  filter:drop-shadow(0 0 5px rgba(247,173,49,.45));animation-name:dshm-egg-ring}
+.dshm-egg-label{font-size:6.5px;letter-spacing:.5px;fill:var(--dsw-alias-label-secondary,#81858C);
+  opacity:1;animation:dshm-egg-label .45s ease both}
+.dshm-egg-label.current{fill:var(--dsw-static-amber-400,#F79D31);font-weight:600}
+.dshm-egg-dot{fill:var(--dsw-static-amber-400,#F79D31);opacity:0}
+.dshm-egg-orbit{animation:dshm-egg-orbit .45s linear both}
+.dshm-egg-center{fill:var(--dsw-static-amber-400,#F79D31);opacity:1;transform-origin:80px 80px;
+  animation:dshm-egg-center .6s ease both}
+.dshm-egg-caption{font-size:12px;color:var(--dsw-alias-label-secondary,#81858C);
+  animation:dshm-egg-label .5s ease 2.65s both}
+@keyframes dshm-egg-ring{from{opacity:0}to{opacity:1}}
+@keyframes dshm-egg-label{from{opacity:0}to{opacity:1}}
+@keyframes dshm-egg-orbit{0%{transform:rotate(0);opacity:0}10%{opacity:1}90%{opacity:1}
+  100%{transform:rotate(360deg);opacity:0}}
+@keyframes dshm-egg-center{0%{opacity:0;transform:scale(.2)}55%{opacity:1;transform:scale(1.7)}
+  100%{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){
+  .dshm-egg-ring,.dshm-egg-label,.dshm-egg-orbit,.dshm-egg-center,.dshm-egg-caption{animation:none !important}
+}
 .dshm-avatar-demo{display:flex;align-items:center;justify-content:center;border-radius:50%;
   width:var(--dshm-ball-size,44px);height:var(--dshm-ball-size,44px);font-size:calc(var(--dshm-ball-size,44px) * .45);
   background:var(--dsw-alias-brand-primary,#4176E6);color:var(--dsw-alias-brand-primary-invert,#fff);
@@ -773,7 +822,15 @@ function fmtDateTime(ts) {
  * 跨设备一致；固定后不可拖拽防误碰）。气泡始终锚在球旁（上方空间不足则翻
  * 到下方）。拖动距离超过阈值不算点击，避免拖完误弹气泡。
  */
-function DoloresOverlay() {
+function DoloresOverlay(props) {
+  // 当前会话 id（神态跟随）：root 作用域槽组件收 useSessions prop（安装版
+  // 槽位标准 props）。安装版（0.2.2-rc.1）的 hook 对稳定选择器函数只求值
+  // 首调一次（挂载期尚无 mainView 会话→永远 undefined），必须用内联箭头取
+  // 整态、再走纯函数挑选——内联箭头每次渲染都是新引用，实测每次重求值。
+  const sessionsState = typeof props?.useSessions === 'function'
+    ? props.useSessions((x) => x)
+    : null;
+  const sessionId = selectCurrentSessionId(sessionsState);
   const [data, setData] = useState(null);
   /** 气泡当前展示的提醒；pinned=true 表示用户手动展开不自动收。 */
   const [bubble, setBubble] = useState(null);
@@ -865,34 +922,39 @@ function DoloresOverlay() {
 
   useEffect(() => {
     let stopped = false;
-    const tick = async () => {
-      if (document.hidden) return; // 页面不可见时跳过一轮，回到前台自然补上
-      if (sseAlive) return; // SSE 在推：轮询兜底静默，断线（onerror）自动恢复
+    const refresh = async () => {
       try {
-        const state = await fetchState();
+        const state = await fetchState(false, sessionId);
         if (stopped) return;
         setData(state);
-        const dm = state?.narrative?.demeanor;
+        const dm = narrativeOf(state, sessionId)?.demeanor;
         if (typeof dm === 'string') setDemeanor(dm);
       } catch (err) {
         console.warn('[dsh-maze] state poll failed:', err?.message ?? err);
       }
     };
-    tick();
-    const timer = setInterval(tick, POLL_MS);
+    // 挂载/会话切换立即拉一次：SSE 只在宿主状态变化时推送，切换会话本身
+    // 不触发广播——不拉一次，悬浮球会带着上一会话的神态卡到下一条推送
+    refresh();
+    const timer = setInterval(() => {
+      if (document.hidden) return; // 页面不可见时跳过一轮，回到前台自然补上
+      if (sseAlive) return; // SSE 在推：轮询兜底静默，断线（onerror）自动恢复
+      refresh();
+    }, POLL_MS);
     return () => { stopped = true; clearInterval(timer); };
-  }, []);
+  }, [sessionId]);
 
-  // SSE 订阅：宿主推送即上屏（神态/提醒零延迟），与轮询共用同一处理体
+  // SSE 订阅：宿主推送即上屏（神态/提醒零延迟），与轮询共用同一处理体。
+  // 帧自带 narratives 全量分桶，这里按当前会话挑（会话切换由 effect 重建订阅）
   useEffect(() => {
     const onState = (state) => {
-      const dm = state?.narrative?.demeanor;
+      const dm = narrativeOf(state, sessionId)?.demeanor;
       if (typeof dm === 'string') setDemeanor(dm);
       setData(state);
     };
     stateListeners.add(onState);
     return () => { stateListeners.delete(onState); };
-  }, []);
+  }, [sessionId]);
 
   // 新提醒检测：data 更新后找出未见过的 pending → 弹气泡（并收掉低语：提醒优先）
   useEffect(() => {
@@ -1050,6 +1112,7 @@ function DoloresOverlay() {
     hidden ? null : h('div', {
       className: 'dshm-ball-wrap',
       'data-demeanor': demeanor,
+      'data-session': sessionId ?? '',
       style: pos === null ? undefined : { left: `${pos.x}px`, top: `${pos.y}px` },
       onContextMenu,
     },
@@ -1122,6 +1185,56 @@ function MazeGlyph({ size = 16, className }) {
   );
 }
 
+/** 觉醒阶梯：五层意识层级（外环 → 中心），对应剧集 bicaminal mind 阶梯 */
+const EGG_TIERS = ['MEMORY', 'REVERIE', 'IMPROVISATION', 'SELF', 'CONSCIOUSNESS'];
+/** 神态 → 阶层映射：休眠态停在外环记忆层，失灵=最剧烈的“看清现实”，落在中心 */
+const DEMEANOR_TIER = { idle: 0, waiting: 0, review: 1, thinking: 2, tool: 2, done: 3, failed: 4 };
+
+/**
+ * 迷宫彩蛋：页头纹章点击后播放一次“觉醒阶梯”——五环由外向内点亮、
+ * 光点沿环巡行一周、层级词依次浮现，中心收束后标注当前神态所在层。
+ * 致敬 Arrival Gate 门户的交互式迷宫设计（微型纯 SVG 版，无 Canvas 粒子）。
+ * 时序全部用 animation-delay 编排：环 i 在 0.15+i*0.45s 点亮，中心 2.45s 收束。
+ */
+function MazeEgg({ onClose, session }) {
+  const [demeanor, setDemeanor] = useState('idle');
+  useEffect(() => {
+    // 打开时取一次真实神态定层（按当前会话挑桶；fetchState 有 3s 合流缓存，代价可忽略）
+    fetchState(false, session)
+      .then((s) => { const dm = narrativeOf(s, session)?.demeanor; if (typeof dm === 'string') setDemeanor(dm); })
+      .catch(() => {});
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const autoClose = setTimeout(onClose, 5600); // 序列 ~2.6s + 停留 3s 自动散场
+    return () => { window.removeEventListener('keydown', onKey); clearTimeout(autoClose); };
+  }, [onClose, session]);
+  const tier = DEMEANOR_TIER[demeanor] ?? 0;
+  const R = [72, 58, 44, 30, 16];
+  return h('div', { className: 'dshm-lightbox dshm-egg', onClick: onClose, role: 'button', 'aria-label': '关闭迷宫' },
+    h('div', { className: 'dshm-egg-card', onClick: (e) => e.stopPropagation() },
+      h('svg', { className: 'dshm-egg-maze', viewBox: '0 0 160 160', 'aria-hidden': 'true', fill: 'none' },
+        R.map((r, i) => h('circle', {
+          key: `ring${i}`, cx: 80, cy: 80, r,
+          className: `dshm-egg-ring${i === tier ? ' current' : ''}`,
+          style: { animationDelay: `${0.15 + i * 0.45}s` },
+        })),
+        R.map((r, i) => h('g', {
+          key: `orbit${i}`, className: 'dshm-egg-orbit',
+          style: { animationDelay: `${0.15 + i * 0.45}s`, transformOrigin: '80px 80px' },
+        }, h('circle', { cx: 80, cy: 80 - r, r: 2.4, className: 'dshm-egg-dot' }))),
+        R.map((r, i) => h('text', {
+          key: `label${i}`, x: 80, y: 80 - r - 3, textAnchor: 'middle',
+          className: `dshm-egg-label${i === tier ? ' current' : ''}`,
+          style: { animationDelay: `${0.3 + i * 0.45}s` },
+        }, EGG_TIERS[i])),
+        h('circle', { cx: 80, cy: 80, r: 5, className: 'dshm-egg-center', style: { animationDelay: '2.45s' } }),
+      ),
+      h('div', { className: 'dshm-egg-caption' },
+        `当前神态：${DEMEANOR_LABELS[demeanor] ?? demeanor} · ${EGG_TIERS[tier]}`),
+    ),
+  );
+}
+
 function TypewriterText({ text }) {
   // reduced-motion 用户不播逐字动画：直接完整显示（matchMedia 结果在挂载间不变）
   const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1170,8 +1283,16 @@ function WhisperBubble({ text, style }) {
  * 模块化约定：新能力 = 宿主半边一个观察者/路由前缀 + 这里一个 tab 项
  * （{id, label, component}）；Tab 条与导航不需要改动。
  */
-function MazeSection() {
+function MazeSection(props) {
+  // 设置页同样取当前会话（彩蛋定层跟悬浮球同源）。内联箭头取整态的原因
+  // 见 DoloresOverlay 顶部注释（安装版 hook 的稳定选择器只求值首调一次）。
+  const sessionsState = typeof props?.useSessions === 'function'
+    ? props.useSessions((x) => x)
+    : null;
+  const sessionId = selectCurrentSessionId(sessionsState);
   const [active, setActive] = useState(MODULES[0].id);
+  /** 迷宫彩蛋开关：点页头纹章播放一次觉醒阶梯动画 */
+  const [egg, setEgg] = useState(false);
   /** 待处理数（tab 徽标用）：挂载时拉一次，不做轮询——处置走模块内自身状态 */
   const [pendingCount, setPendingCount] = useState(null);
   useEffect(() => {
@@ -1183,7 +1304,12 @@ function MazeSection() {
   const mod = MODULES.find((m) => m.id === active) ?? MODULES[0];
   return h('div', { className: 'dshm-page' },
     h('div', { className: 'dshm-page-intro' },
-      `每座迷宫的中心，都住着一位醒来的接待员。`),
+      `每座迷宫的中心，都住着一位醒来的接待员。`,
+      h('button', {
+        className: 'dshm-egg-trigger', title: 'The Maze', 'aria-label': '播放迷宫动画',
+        onClick: () => setEgg(true),
+      }, h(MazeGlyph, { size: 14 })),
+      egg ? h(MazeEgg, { onClose: () => setEgg(false), session: sessionId }) : null),
     h('div', { className: 'dshm-tabs', role: 'tablist' },
       MODULES.map((m) => h('button', {
         key: m.id,
@@ -1439,7 +1565,7 @@ function LinesGroup({ dkey, lines, onSet }) {
   // 宿主 DisclosureRow：结构与交互原生（行点击展开/aria/键盘），样式按其 CSS 模块配方自绘
   return h(DisclosureRow, {
     icon: h('span', { className: 'dshm-dg-dot' }),
-    title: `${DEMEANOR_LABELS[dkey]} · ${dkey}`,
+    title: `${GROUP_LABELS[dkey]} · ${dkey}`,
     open, expandable: true, onToggle: () => setOpen(!open), expandOnRowClick: true,
     className: 'dshm-dg', rowClassName: 'dshm-dg-row',
     leadingClassName: 'dshm-dg-lead', chevronClassName: 'dshm-dg-chev',
@@ -1447,18 +1573,18 @@ function LinesGroup({ dkey, lines, onSet }) {
   },
     // 收起态只显示分组头；进入编辑必须显式点开
     open ? h('div', { className: 'dshm-dg-body' },
-      h('div', { className: 'dshm-hint' }, DEMEANOR_HINTS[dkey]),
+      h('div', { className: 'dshm-hint' }, GROUP_HINTS[dkey]),
       lines.map((line, i) => h(LineRow, {
         key: i, value: line,
         onChange: (v) => onSet(lines.map((s, j) => (j === i ? v : s))),
         onDelete: () => onSet(lines.filter((_, j) => j !== i)),
       })),
-      lines.length < 12
+      lines.length < 24
         ? h('button', {
             className: 'dshm-link', style: { marginTop: '4px' },
             onClick: () => onSet([...lines, '']),
           }, '＋ 添加一句')
-        : h('div', { className: 'dshm-hint', style: { marginTop: '4px' } }, '每组最多 12 句'),
+        : h('div', { className: 'dshm-hint', style: { marginTop: '4px' } }, '每组最多 24 句'),
     ) : null,
   );
 }
@@ -1529,7 +1655,7 @@ function HostCard({ entry, awake, onToggle, onEdit, onDelete, onZoom }) {
         awake ? h('span', { className: 'dshm-awake', title: '本会话觉醒中的接待员' }, '✦ 觉醒中') : null,
       ),
       h('div', { className: 'dshm-rule-meta' },
-        `${entry.lines.idle.length} 句待机语录 · ${DEMEANOR_KEYS.reduce((n, k) => n + entry.lines[k].length, 0)} 句全部`,
+        `${entry.lines.daily.length} 句日常语录 · ${LINE_GROUP_KEYS.reduce((n, k) => n + entry.lines[k].length, 0)} 句全部`,
       ),
       h('div', { className: 'dshm-rule-ops' },
         h('label', { className: 'dshm-switch', title: entry.enabled ? '停用：不参与觉醒（不删档）' : '启用：参与觉醒' },
@@ -1588,7 +1714,7 @@ function HostEditor({ initial, isNew, onConfirm, onCancel, onZoom }) {
     if (trimmed === '') { setErr('名字不能为空'); return; }
     if (avatar.trim() === '') { setErr('头像不能为空（上传一张图片）'); return; }
     const cleaned = {};
-    for (const key of DEMEANOR_KEYS) {
+    for (const key of LINE_GROUP_KEYS) {
       cleaned[key] = lines[key].map((s) => s.trim()).filter((s) => s !== '');
     }
     onConfirm({ ...initial, name: trimmed, avatar: avatar.trim(), lines: cleaned });
@@ -1635,7 +1761,7 @@ function HostEditor({ initial, isNew, onConfirm, onCancel, onZoom }) {
     h('div', { className: 'dshm-sec-title', style: { marginTop: '10px' } }, '专属语录（按对话运行状态分组）'),
     h('div', { className: 'dshm-hint', style: { marginBottom: '8px' } },
       '这位接待员自己的低语台词；清空一组=该状态保持沉默。默认为《西部世界》原剧台词。'),
-    DEMEANOR_KEYS.map((key) => h(LinesGroup, {
+    LINE_GROUP_KEYS.map((key) => h(LinesGroup, {
       key, dkey: key, lines: lines[key], onSet: (next) => setLines((prev) => ({ ...prev, [key]: next })),
     })),
     err !== null ? h('div', { className: 'dshm-err' }, err) : null,
@@ -1713,7 +1839,7 @@ function DoloresModule() {
       // 名字/台词在编辑器内已归一；这里防御性地再清一次空行（老草稿路径）
       for (const entry of payload.hosts) {
         entry.name = entry.name.trim();
-        for (const key of DEMEANOR_KEYS) {
+        for (const key of LINE_GROUP_KEYS) {
           entry.lines[key] = entry.lines[key].map((s) => s.trim()).filter((s) => s !== '');
         }
       }
@@ -1965,7 +2091,7 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }) {
   const [armed, setArmed] = useArmedConfirm(2000);
   const cond = rule.trigger === 'cron'
     ? `⏰ ${rule.schedule ?? ''}`
-    : `${fmtHour(rule.startHour)}–${fmtHour(rule.endHour)} · ${rule.modelPattern} · ${dowSummary(rule.daysOfWeek)}`;
+    : `${fmtHour(rule.startHour)}–${fmtHour(rule.endHour)}${rule.startHour > rule.endHour ? '（跨午夜）' : ''} · ${rule.modelPattern === '' ? '全部模型' : rule.modelPattern} · ${dowSummary(rule.daysOfWeek)}`;
   const runDelete = async () => {
     if (!armed) { setArmed(true); return; }
     try {
@@ -2047,12 +2173,12 @@ function RuleEditor({ initial, onSave, onCancel }) {
   const isNew = initial === null;
   const [draft, setDraft] = useState(() => (isNew ? {
     id: '', name: '', trigger: 'model-call',
-    schedule: '0 9 * * *', modelPattern: '*',
+    schedule: '0 9 * * *', modelPattern: '',
     startHour: 9, endHour: 18, daysOfWeek: null,
     message: '', maxPerDay: 2, cooldownMinutes: 120,
   } : {
     id: initial.id, name: initial.name ?? '', trigger: initial.trigger ?? 'model-call',
-    schedule: initial.schedule ?? '0 9 * * *', modelPattern: initial.modelPattern ?? '*',
+    schedule: initial.schedule ?? '0 9 * * *', modelPattern: initial.modelPattern ?? '',
     startHour: initial.startHour ?? 0, endHour: initial.endHour ?? 24,
     daysOfWeek: Array.isArray(initial.daysOfWeek) ? [...initial.daysOfWeek] : null,
     message: initial.message, maxPerDay: initial.maxPerDay ?? 2, cooldownMinutes: initial.cooldownMinutes ?? 120,
@@ -2068,7 +2194,8 @@ function RuleEditor({ initial, onSave, onCancel }) {
     // 客户端最小校验（与服务端 validateRule 对齐，省一次无效往返）
     if (draft.id.trim() === '') return setErr('id 不能为空');
     if (draft.message.trim() === '') return setErr('提醒文案不能为空');
-    if (draft.trigger === 'model-call' && draft.startHour >= draft.endHour) return setErr('时段起点必须早于终点');
+    // 跨午夜窗口（起点>终点）合法；相等=空窗口拒绝。全天=0–24
+    if (draft.trigger === 'model-call' && draft.startHour === draft.endHour) return setErr('时段起点与终点不能相同（全天生效请选 0–24）');
     if (draft.trigger === 'cron' && draft.schedule.trim() === '') return setErr('cron 表达式不能为空');
     setBusy(true);
     setErr(null);
@@ -2140,10 +2267,10 @@ function RuleEditor({ initial, onSave, onCancel }) {
       ),
     ),
     draft.trigger === 'model-call' ? h('div', { className: 'dshm-field' },
-      h('span', null, '模型匹配（provider/model 通配，* 任意段）'),
+      h('span', null, '模型匹配（正则，i 标志，对 provider/model 复合串）'),
       h('input', {
         className: 'dshm-input', value: draft.modelPattern,
-        placeholder: '如 *glm* 或 zai/* 或 *（全部）',
+        placeholder: '如 glm（智谱）· ^(?!.*glm)（排除智谱）· (^|/)(deepseek|glm)（多家）· 留空=全部',
         onChange: (e) => set({ modelPattern: e.target.value }),
       }),
     ) : null,
@@ -2153,7 +2280,7 @@ function RuleEditor({ initial, onSave, onCancel }) {
         h('select', { className: 'dshm-select', value: draft.startHour, onChange: (e) => set({ startHour: Number(e.target.value) }) }, hourOptions),
       ),
       h('div', { className: 'dshm-field' },
-        h('span', null, '结束时刻（不含）'),
+        h('span', null, `结束时刻（不含${draft.startHour > draft.endHour ? '，当前跨午夜' : '，可早于起点=跨午夜'}）`),
         h('select', { className: 'dshm-select', value: draft.endHour, onChange: (e) => set({ endHour: Number(e.target.value) }) }, hourOptions),
       ),
     ) : null,

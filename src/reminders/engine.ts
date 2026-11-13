@@ -20,8 +20,6 @@ export interface RuleDef {
   readonly trigger: Trigger;
   /** cron 触发源必填：5 字段表达式（分 时 日 月 周） */
   readonly schedule?: string;
-  /** model-call 条件：`provider/model` 通配匹配，默认 '*' */
-  readonly modelPattern?: string;
   /** model-call 条件：生效时段 [startHour, endHour)，默认全天 */
   readonly startHour?: number;
   readonly endHour?: number;
@@ -35,6 +33,9 @@ export interface RuleDef {
   readonly when?: string;
   /** model-call 条件：限定星期（0=周日..6=周六，JS getDay 语义；缺省=每天） */
   readonly daysOfWeek?: readonly number[];
+  /** model-call 条件：模型匹配正则源串（对 `provider/model` 复合串测试，i 标志大小写
+   *  不敏感）。缺省/空串 = 匹配一切。排除用负向断言：`^(?!.*glm)` = 非智谱才提醒 */
+  readonly modelPattern?: string;
 }
 
 /** 运行时状态。字段一律追加到末尾（遵循"追末尾"约定） */
@@ -88,32 +89,57 @@ export function localDateKey(at: number): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
-/** 通配匹配：'*' 分段，段间子串匹配（大小写不敏感），如 '*glm*' 匹配 'zai/glm-5.3' */
-export function wildcardMatch(pattern: string, value: string): boolean {
-  const p = pattern.toLowerCase();
-  const v = value.toLowerCase();
-  // 无 '*'：整体相等才匹配（避免裸字符串被当子串误配）
-  if (!p.includes('*')) return p === v;
-  const parts = p.split('*');
-  let idx = 0;
-  for (let i = 0; i < parts.length; i++) {
-    const seg = parts[i]!;
-    if (seg === '') continue;
-    if (i === 0) {
-      // 首段必须前缀对齐
-      if (!v.startsWith(seg, idx)) return false;
-      idx = seg.length;
-    } else if (i === parts.length - 1) {
-      // 末段必须后缀对齐，且不得与已匹配段重叠（'ab*b' 不应匹配 'ab'）
-      if (idx > v.length - seg.length || !v.endsWith(seg)) return false;
-      idx = v.length;
-    } else {
-      const found = v.indexOf(seg, idx);
-      if (found === -1) return false;
-      idx = found + seg.length;
-    }
+/** 旧通配 pattern（`*` 分段）转正则源串：段按字面转义、中间 `*` → `[\s\S]*`；
+ *  首/尾 `*` 直接省略（无锚=任意前后）；无 `*` 为全等匹配（^…$）。'*' → ''（匹配一切） */
+function wildcardToRegexSrc(pattern: string): string {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!pattern.includes('*')) return `^${esc(pattern)}$`;
+  const lead = pattern.startsWith('*');
+  const trail = pattern.endsWith('*');
+  let segs = pattern.split('*').map(esc);
+  if (lead) segs = segs.slice(1);
+  if (trail && segs.length > 0) segs = segs.slice(0, -1);
+  const src = segs.join('[\\s\\S]*');
+  return (lead ? '' : '^') + src + (trail ? '' : '$');
+}
+
+/** 旧匹配字段迁移（通配/exclude 时代 → 正则-only），在 validateRule 之前跑：
+ *  - 带 patternMode/excludeModelPattern 旧键：pattern 不是合法正则（如 '*glm*'）→ 按通配
+ *    语义转换，是合法正则则原样保留；exclude 合成为串首负向断言（与旧排除门
+ *    "子串命中即拒绝"语义一致）：'*' + exclude '*glm*' → `^(?!.*glm)`
+ *  - 不带旧键的新格式：合法正则原样返回；含 '*' 且编译失败的（pre-模式时代的
+ *    通配数据，如裸 '*glm*'）同样按通配转换；不含 '*' 的编译失败原样保留，
+ *    交给 validateRule 带字段名报错（新格式的正则笔误要 fail-loud，不能静默转义） */
+export function migrateRuleInput(raw: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...raw };
+  const exclude = typeof next.excludeModelPattern === 'string' && next.excludeModelPattern.trim() !== ''
+    ? next.excludeModelPattern
+    : undefined;
+  const hadLegacy = next.patternMode !== undefined || exclude !== undefined;
+  delete next.patternMode;
+  delete next.excludeModelPattern;
+  const pattern = typeof next.modelPattern === 'string' ? next.modelPattern : '';
+  const compiles = (v: string): boolean => {
+    try {
+      new RegExp(v, 'i');
+      return true;
+    } catch {
+      return false;
   }
-  return true;
+  };
+  if (!hadLegacy) {
+    if (compiles(pattern) || !pattern.includes('*')) return next;
+    next.modelPattern = wildcardToRegexSrc(pattern);
+    return next;
+  }
+  let src = compiles(pattern) ? pattern : wildcardToRegexSrc(pattern);
+  if (exclude !== undefined) {
+    const exc = compiles(exclude) ? exclude : wildcardToRegexSrc(exclude);
+    const body = src.startsWith('^') ? src.slice(1) : src;
+    src = `^(?![\\s\\S]*${exc})${body}`;
+  }
+  next.modelPattern = src;
+  return next;
 }
 
 /** 消息模板渲染：{model}/{provider} 占位替换 */
@@ -139,7 +165,9 @@ export function normalizeRule(raw: Record<string, unknown>): RuleDef {
     message: String(raw.message ?? ''),
     trigger,
     schedule: trigger === 'cron' ? String(raw.schedule ?? '') : undefined,
-    modelPattern: typeof raw.modelPattern === 'string' && raw.modelPattern !== '' ? raw.modelPattern : '*',
+    modelPattern: typeof raw.modelPattern === 'string' && raw.modelPattern !== ''
+      ? raw.modelPattern
+      : '',
     startHour: typeof raw.startHour === 'number' ? raw.startHour : 0,
     endHour: typeof raw.endHour === 'number' ? raw.endHour : 24,
     maxPerDay: typeof raw.maxPerDay === 'number' ? raw.maxPerDay : 2,
@@ -202,16 +230,45 @@ function ensureFreshState(ruleId: string, states: Map<string, RuleState>, now: n
   return prev;
 }
 
+/** 正则模式编译缓存（pattern 文本 → RegExp）。装载路径已由 validateRule 保证语法合法，
+ *  这里缓存只为热路径（每次 llm/stream × 每条规则）免重复编译；容量上限防长期编辑膨胀 */
+const regexCache = new Map<string, RegExp | null>();
+function cachedRegex(pattern: string): RegExp | null {
+  let re = regexCache.get(pattern);
+  if (re === undefined) {
+    if (regexCache.size > 64) regexCache.clear();
+    try {
+      re = new RegExp(pattern, 'i');
+    } catch {
+      // 语法非法（理论不可达：validateRule 装载即验）：按不匹配处理，不炸观察链
+      re = null;
+    }
+    regexCache.set(pattern, re);
+  }
+  return re;
+}
+
+/** 模型匹配：正则测试（i 标志，空串=匹配一切）；非法正则不匹配 */
+function matchPattern(rule: Pick<RuleDef, 'modelPattern'>, value: string): boolean {
+  const re = cachedRegex(rule.modelPattern ?? '');
+  return re !== null && re.test(value);
+}
+
 /** model-call 条件评估（L1 结构化 + L2 when AND） */
 export function evaluateModelCall(rule: RuleDef, state: RuleState, use: ModelUse, when: WhenFn | null): boolean {
   if (!state.enabled) return false;
   if (state.mutedDay !== undefined) return false;
   const at = new Date(use.at);
   const hour = at.getHours();
-  if (hour < (rule.startHour ?? 0) || hour >= (rule.endHour ?? 24)) return false;
+  // 时段门：start <= end 为常规窗口 [start, end)；start > end 为跨午夜环绕
+  // （18→14 表示 18:00–23:59 与 00:00–13:59，覆盖"晚高峰到次日下午"这类窗口）
+  const start = rule.startHour ?? 0;
+  const end = rule.endHour ?? 24;
+  const inWindow = start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+  if (!inWindow) return false;
   // 星期限定（0=周日..6=周六）：工作日规则如 glm 高峰提醒周末不触发
   if (rule.daysOfWeek !== undefined && !rule.daysOfWeek.includes(at.getDay())) return false;
-  if (!wildcardMatch(rule.modelPattern ?? '*', `${use.provider}/${use.model}`)) return false;
+  if (!matchPattern(rule, `${use.provider}/${use.model}`)) return false;
   if (when !== null && !when(use, hour, new Date(use.at).getMinutes(), new Date(use.at).getDay())) return false;
   return true;
 }

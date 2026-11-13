@@ -14,13 +14,13 @@
         rules:
           # 默认规则即用户的第一个需求：14:00–18:00 高消耗时段用 GLM 系模型
           # 时提醒额度消耗快、建议切换。message 里的 {model}/{provider} 由
-          # 宿主半边在触发时替换。
+          # 宿主半边在触发时替换。modelPattern 为正则（i 标志）。
           - id: glm-peak-hours
             message: >-
               当前模型 {model}（{provider}）处于 14:00–18:00 高消耗时段，
               GLM 额度消耗会明显加快，建议切换至其他模型。
             startHour: 14
             endHour: 18
-            modelPattern: '*glm*'
+            modelPattern: 'glm'
             maxPerDay: 2
             cooldownMinutes: 120

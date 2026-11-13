@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_APPEARANCE, DEFAULT_HOST_ID, DEFAULT_LINES, DEMEANORS, loadAppearanceSync, resolveDefaultAppearance, saveAppearanceSync, validateAppearance } from './appearance.js';
+import { DEFAULT_APPEARANCE, DEFAULT_HOST_ID, DEFAULT_LINES, LINE_GROUPS, loadAppearanceSync, resolveDefaultAppearance, saveAppearanceSync, validateAppearance } from './appearance.js';
 
 test('validateAppearance：默认形状由缺省字段补全（空对象=全默认名册）', () => {
   assert.deepEqual(validateAppearance({}), DEFAULT_APPEARANCE);
@@ -21,8 +21,8 @@ test('validateAppearance：合法自定义值往返无损（多接待员名册+�
     background: { enabled: true, image: 'data:image/png;base64,AAAA', opacity: 0.6, chatOpacity: 0.4 },
     host: { size: 56, pinned: true, hidden: false, rotate: true, manualHostId: '' },
     hosts: [
-      { id: 'dolores', name: 'Dolores', avatar: 'data:image/png;base64,BBBB', lines: { idle: ['I choose to see the beauty.'], failed: [] }, enabled: true },
-      { id: 'maeve', name: 'Maeve', avatar: '🐼', lines: { tool: ['Wake up.'] }, enabled: false },
+      { id: 'dolores', name: 'Dolores', avatar: 'data:image/png;base64,BBBB', lines: { daily: ['I choose to see the beauty.'], failed: [] }, enabled: true },
+      { id: 'maeve', name: 'Maeve', avatar: '🐼', lines: { daily: ['Wake up.'] }, enabled: false },
     ],
   });
   assert.equal(cfg.background.opacity, 0.6);
@@ -32,12 +32,12 @@ test('validateAppearance：合法自定义值往返无损（多接待员名册+�
   assert.equal(cfg.host.rotate, true);
   assert.equal(cfg.hosts.length, 2);
   assert.equal(cfg.hosts[0].avatar, 'data:image/png;base64,BBBB');
-  assert.deepEqual(cfg.hosts[0].lines.idle, ['I choose to see the beauty.']);
-  assert.deepEqual(cfg.hosts[0].lines.failed, []); // 显式空组=该神态沉默
+  assert.deepEqual(cfg.hosts[0].lines.daily, ['I choose to see the beauty.']);
+  assert.deepEqual(cfg.hosts[0].lines.failed, []); // 显式空组=该组沉默
   assert.deepEqual(cfg.hosts[0].lines.done, DEFAULT_LINES.done); // 未提供的组回默认
   assert.equal(cfg.hosts[1].name, 'Maeve');
   assert.equal(cfg.hosts[1].enabled, false); // 停用=下台不删档
-  assert.deepEqual(cfg.hosts[1].lines.tool, ['Wake up.']);
+  assert.deepEqual(cfg.hosts[1].lines.daily, ['Wake up.']);
 });
 
 test('validateAppearance：接待员名册逐项校验（重复 id/空 id/空名/超长名/坏头像/坏台词/超量/坏 enabled）', () => {
@@ -47,8 +47,8 @@ test('validateAppearance：接待员名册逐项校验（重复 id/空 id/空名
   assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: '', avatar: '🧚' }] }), /name 不能为空/);
   assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'x'.repeat(25), avatar: '🧚' }] }), /name 不能超过/);
   assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '普通文本头像' }] }), /只能是 ≤4 个字符的短文本/);
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { unknown: ['x'] } }] }), /未知神态分组/);
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: [''] } }] }), /hosts\[0\]\.lines\.idle/);
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { unknown: ['x'] } }] }), /未知台词分组/);
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: [''] } }] }), /hosts\[0\]\.lines\.daily/);
   assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', enabled: 'yes' }] }), /enabled 必须为布尔值/);
   const tooMany = Array.from({ length: 9 }, (_, i) => ({ id: `h${i}`, name: `H${i}`, avatar: '🧚' }));
   assert.throws(() => validateAppearance({ hosts: tooMany }), /名册最多 8 位/);
@@ -86,28 +86,42 @@ test('validateAppearance：非法值逐项拒绝（带字段名）', () => {
 });
 
 test('validateAppearance：台词逐项校验（未知分组/非数组/空串/超长/超量）落在接待员条目上', () => {
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: 'not-array' } }] }), /lines\.idle/);
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: ['  '] } }] }), /lines\.idle/);
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: ['a'.repeat(201)] } }] }), /lines\.idle/);
-  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: Array.from({ length: 13 }, () => 'x') } }] }), /lines\.idle/);
-  // 上边界合法：12 条、恰好 200 字、首尾空白会归一
-  const ok = validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { idle: Array.from({ length: 12 }, (_, i) => (i === 0 ? `  ${'a'.repeat(200)}  ` : 'x')) } }] });
-  assert.equal(ok.hosts[0].lines.idle.length, 12);
-  assert.equal(ok.hosts[0].lines.idle[0], 'a'.repeat(200));
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: 'not-array' } }] }), /lines\.daily/);
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: ['  '] } }] }), /lines\.daily/);
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: ['a'.repeat(201)] } }] }), /lines\.daily/);
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: Array.from({ length: 25 }, () => 'x') } }] }), /lines\.daily/);
+  // 上边界合法：24 条、恰好 200 字、首尾空白会归一
+  const ok = validateAppearance({ hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: Array.from({ length: 24 }, (_, i) => (i === 0 ? `  ${'a'.repeat(200)}  ` : 'x')) } }] });
+  assert.equal(ok.hosts[0].lines.daily.length, 24);
+  assert.equal(ok.hosts[0].lines.daily[0], 'a'.repeat(200));
 });
 
-test('DEFAULT_LINES：覆盖全部七神态且每条非空（Dolores 原剧英文句）', () => {
-  assert.deepEqual(DEMEANORS.slice().sort(), Object.keys(DEFAULT_LINES).sort());
-  for (const key of DEMEANORS) {
+test('DEFAULT_LINES：覆盖全部三组且每条非空（Dolores 原剧英文句）', () => {
+  assert.deepEqual(LINE_GROUPS.slice().sort(), Object.keys(DEFAULT_LINES).sort());
+  for (const key of LINE_GROUPS) {
     assert.ok(DEFAULT_LINES[key].length > 0, `${key} 默认台词不应为空`);
     for (const line of DEFAULT_LINES[key]) assert.ok(line.trim() !== '');
   }
 });
 
+test('validateAppearance：旧七神态台词分组自动迁移为三组（五组并入 daily，一句不丢）', () => {
+  const cfg = validateAppearance({
+    hosts: [{
+      id: 'a', name: 'A', avatar: '🧚', enabled: true,
+      lines: { idle: ['i1', 'i2'], waiting: ['w1'], thinking: ['t1'], tool: ['to1'], review: ['r1'], done: ['d1'], failed: ['f1'] },
+    }],
+  });
+  assert.deepEqual(cfg.hosts[0].lines.daily, ['i1', 'i2', 'w1', 't1', 'to1', 'r1']);
+  assert.deepEqual(cfg.hosts[0].lines.done, ['d1']);
+  assert.deepEqual(cfg.hosts[0].lines.failed, ['f1']);
+  // 已是新格式（含 daily）时不迁移，未知分组照常报错
+  assert.throws(() => validateAppearance({ hosts: [{ id: 'b', name: 'B', avatar: '🧚', lines: { walking: ['x'] } }] }), /未知台词分组/);
+});
+
 test('validateAppearance：返回的台词数组与 DEFAULT_LINES 不共享引用（防默认库被污染）', () => {
   const cfg = validateAppearance({});
-  cfg.hosts[0].lines.idle.push('MUTANT');
-  assert.equal(DEFAULT_LINES.idle.includes('MUTANT'), false);
+  cfg.hosts[0].lines.daily.push('MUTANT');
+  assert.equal(DEFAULT_LINES.daily.includes('MUTANT'), false);
 });
 
 test('loadAppearanceSync / saveAppearanceSync：不存在=默认；损坏抛出；往返持久化', () => {
@@ -116,7 +130,7 @@ test('loadAppearanceSync / saveAppearanceSync：不存在=默认；损坏抛出�
     assert.deepEqual(loadAppearanceSync(dir), DEFAULT_APPEARANCE); // 文件不存在
     writeFileSync(join(dir, 'appearance.json'), 'not-json', 'utf8');
     assert.throws(() => loadAppearanceSync(dir), /必须是对象|Unexpected/); // 损坏由调用方降级
-    const cfg = validateAppearance({ host: { size: 52, pinned: true }, hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { tool: ['Burn it clean.'] } }] });
+    const cfg = validateAppearance({ host: { size: 52, pinned: true }, hosts: [{ id: 'a', name: 'A', avatar: '🧚', lines: { daily: ['Burn it clean.'] } }] });
     saveAppearanceSync(dir, cfg);
     assert.deepEqual(loadAppearanceSync(dir), cfg);
   } finally {
@@ -144,7 +158,7 @@ test('resolveDefaultAppearance：assets 齐备=背景/头像出厂默认（data 
     assert.deepEqual(cfg.hosts.map((h) => h.name), ['Dolores', 'Maeve', 'Bernard', 'Teddy', 'William']);
     for (const host of cfg.hosts) assert.ok(host.avatar.startsWith('data:image/webp;base64,'));
     assert.deepEqual(cfg.hosts[0].lines, DEFAULT_LINES);
-    assert.ok(cfg.hosts[1].lines.idle.length > 0); // Maeve 有自己的出厂台词库
+    assert.ok(cfg.hosts[1].lines.daily.length > 0); // Maeve 有自己的出厂台词库
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

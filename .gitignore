@@ -1,1 +1,5 @@
 node_modules/
+# 插件运行时数据（本地驱动 apply() 时落在 repo 内）
+data/
+# 本地实验/开发脚手架（防运行时数据混入：Vikunja 时代的 db 曾差点入库）
+dev/

@@ -39,7 +39,7 @@ import { matchesCron, nextCronMatch, parseCron, type CronSpec } from './reminder
 import { validateRule } from './reminders/validate.js';
 import { loadStoreSync, mergeRules, pluginRoot, resolveDataDir, saveStoreSync } from './reminders/store.js';
 import { DEFAULT_APPEARANCE, loadAppearanceSync, resolveDefaultAppearance, saveAppearanceSync, validateAppearance, type AppearanceConfig } from './appearance.js';
-import { currentDemeanor, narrativeEventToDemeanor, type DemeanorRecord } from './narrative.js';
+import { currentDemeanor, narrativeEventToDemeanor, pickDemeanorRecord, type Demeanor, type DemeanorRecord } from './narrative.js';
 
 export const name = 'dsh-maze';
 export const inject = ['webServer'];
@@ -69,6 +69,7 @@ export interface RouteReq {
   headers?: Record<string, unknown>;
   on(ev: 'data' | 'end' | 'error' | 'close', cb: (chunk?: unknown) => void): void;
   destroy?(): void;
+  url?: string;
 }
 interface RouteRes {
   writeHead(code: number, headers: Record<string, string>): void;
@@ -206,8 +207,26 @@ export function apply(ctx: any, config: Config): void {
   const pending: Reminder[] = [];
   const history: HistoryEntry[] = [];
   let currentUse: ModelUse | null = null;
-  // Dolores 神态记录（纯内存：会话事件流投影，见 narrative.ts）
-  let demeanorRecord: DemeanorRecord | undefined;
+  // Dolores 神态按会话分桶（纯内存）：悬浮球跟随用户正在看的会话，多会话并行
+  // 不互相串台。session/event 自带会话身份直接入桶；llm/stream 无会话标识，
+  // 归给最近活跃的会话（模型调用总发生在某个会话的 turn 内，而该会话在调用
+  // 前后必有事件流出）。
+  const demeanorBySession = new Map<string, DemeanorRecord>();
+  let lastActiveSessionId: string | undefined;
+  /** 桶数量上限：防长期运行（每天大量临时会话）内存膨胀，按记录时间淘汰最旧 */
+  const NARRATIVE_SESSIONS_MAX = 32;
+  function recordDemeanor(sessionId: string, record: DemeanorRecord): void {
+    demeanorBySession.set(sessionId, record);
+    if (demeanorBySession.size > NARRATIVE_SESSIONS_MAX) {
+      let oldestKey: string | undefined;
+      let oldestAt = Infinity;
+      for (const [key, r] of demeanorBySession) {
+        if (r.at < oldestAt) { oldestAt = r.at; oldestKey = key; }
+      }
+      // 刚写入的桶永不淘汰（即使它最旧也说明其它桶更新）
+      if (oldestKey !== undefined && oldestKey !== sessionId) demeanorBySession.delete(oldestKey);
+    }
+  }
 
   /** when 表达式与 cron 匹配器的派生表（装载与每次规则变更后重建） */
   const compiled = new Map<string, WhenFn | null>();
@@ -235,13 +254,18 @@ export function apply(ctx: any, config: Config): void {
     rebuildDerived();
   }
 
-  /** state 路由负载：规则快照（含运行时状态）+ 当前模型 + pending + 历史 + Dolores 神态 */
-  function statePayload(): unknown {
+  /** state 路由负载：规则快照（含运行时状态）+ 当前模型 + pending + 历史 + 神态。
+   *  session 指定 时 narrative 取该会话的桶；narratives 附全量分桶供 SSE 客户端各自挑选 */
+  function statePayload(session?: string): unknown {
     const now = Date.now();
     const today = localDateKey(now);
+    const record = pickDemeanorRecord(demeanorBySession, session);
+    const narratives: Record<string, { demeanor: Demeanor; since: number }> = {};
+    for (const [id, r] of demeanorBySession) narratives[id] = { demeanor: currentDemeanor(r, now), since: r.at };
     return {
       current: currentUse === null ? null : { provider: currentUse.provider, model: currentUse.model, since: currentUse.at },
-      narrative: { demeanor: currentDemeanor(demeanorRecord, now), since: demeanorRecord?.at ?? null },
+      narrative: { demeanor: currentDemeanor(record, now), since: record?.at ?? null },
+      narratives,
       now,
       rules: rules.map(r => {
         const s = states.get(r.id);
@@ -289,14 +313,19 @@ export function apply(ctx: any, config: Config): void {
   ctx.on('llm/stream', (options: { provider: string; model: string }, next: () => unknown) => {
     const use: ModelUse = { provider: options.provider, model: options.model, at: Date.now() };
     currentUse = use;
-    demeanorRecord = { demeanor: 'thinking', at: use.at };
+    // 神态归给最近活跃会话（见 demeanorBySession 注释）；尚无任何会话事件时
+    // 无法归属，只记模型不记神态
+    if (lastActiveSessionId !== undefined) recordDemeanor(lastActiveSessionId, { demeanor: 'thinking', at: use.at });
     pending.push(...observe(rules, states, use, compiled));
     scheduleBroadcast();
     return next();
   });
 
   // ---- 观察者：会话事件流 → Dolores 神态镜像（idle/waiting/thinking/tool/review/done/failed）
-  ctx.on('session/event', (_session: unknown, event: { type: string; time?: unknown; data?: unknown }) => {
+  ctx.on('session/event', (session: unknown, event: { type: string; time?: unknown; data?: unknown }) => {
+    // 会话身份防御式读取（跨构建 Session 类型可能滞后）
+    const sid = typeof (session as { id?: unknown } | null)?.id === 'string' ? (session as { id: string }).id : undefined;
+    if (sid !== undefined) lastActiveSessionId = sid;
     // turn/end 的 reason.kind 决定收场神态；字段做防御式读取（跨构建类型表可能滞后于运行时）
     let reasonKind: string | undefined;
     if (event.type === 'turn/end') {
@@ -304,10 +333,17 @@ export function apply(ctx: any, config: Config): void {
       if (reason !== undefined && typeof reason.kind === 'string') reasonKind = reason.kind;
     }
     const demeanor = narrativeEventToDemeanor(event.type, reasonKind);
-    if (demeanor === undefined) return;
+    if (demeanor === undefined || sid === undefined) return;
     // 事件时间戳缺失（异常流）时退回当前时间
     const at = typeof event.time === 'number' ? event.time : Date.now();
-    demeanorRecord = { demeanor, at };
+    recordDemeanor(sid, { demeanor, at });
+    scheduleBroadcast();
+  });
+
+  // 会话销毁即清理其神态桶（防 map 慢性累积；上限淘汰之外的兜底）
+  ctx.on('session/disposed', (session: unknown) => {
+    const sid = typeof (session as { id?: unknown } | null)?.id === 'string' ? (session as { id: string }).id : undefined;
+    if (sid === undefined || !demeanorBySession.delete(sid)) return;
     scheduleBroadcast();
   });
 
@@ -373,7 +409,14 @@ export function apply(ctx: any, config: Config): void {
       }),
       registerRoute(webCtx.webServer, '/maze/reminders/state', (req: RouteReq, res: RouteRes) => {
         if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
-        sendJson(res, 200, statePayload());
+        // ?session=<id>：神态跟随指定会话（悬浮球/彩蛋传当前会话）；缺省回落最近活跃
+        let session: string | undefined;
+        try {
+          session = new URL(req.url ?? '', 'http://localhost').searchParams.get('session') ?? undefined;
+        } catch {
+          session = undefined;
+        }
+        sendJson(res, 200, statePayload(session === '' ? undefined : session));
       }),
       registerRoute(webCtx.webServer, '/maze/reminders/ack', async (req: RouteReq, res: RouteRes) => {
         if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });

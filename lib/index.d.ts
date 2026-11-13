@@ -28,6 +28,7 @@ export interface RouteReq {
     headers?: Record<string, unknown>;
     on(ev: 'data' | 'end' | 'error' | 'close', cb: (chunk?: unknown) => void): void;
     destroy?(): void;
+    url?: string;
 }
 /**
  * 读 JSON 请求体；坏 JSON / 请求中断（error 事件）/ 超过 maxBytes 都返回 undefined（路由回 400）。

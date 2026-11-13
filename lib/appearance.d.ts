@@ -6,7 +6,6 @@
  * 出厂默认 = 资产版（resolveDefaultAppearance：背景图+五位接待员头像走
  * assets/，台词库在 host-lines.ts，全局摆件偏好烘焙在 DEFAULT_APPEARANCE.host）。
  */
-import type { Demeanor } from './narrative.js';
 /** 外观配置形状；version 供未来结构迁移 */
 export interface BackgroundConfig {
     enabled: boolean;
@@ -30,9 +29,12 @@ export interface HostConfig {
     /** 手动指定的接待员 id（rotate=false 时生效；空串/失效时回落首位启用者） */
     manualHostId: string;
 }
-/** 常用语：按神态分组的台词库（空数组=该神态保持沉默） */
+/** 台词分组固定顺序（校验遍历与 UI 分组展示共用） */
+export declare const LINE_GROUPS: readonly LineGroup[];
+/** 常用语：按台词分组（日常大池/收束/失灵；空数组=该组保持沉默） */
+export type LineGroup = 'daily' | 'done' | 'failed';
 export type LinesConfig = {
-    [K in Demeanor]: string[];
+    [K in LineGroup]: string[];
 };
 /** 一位接待员：迷宫中心的一位觉醒者（形象+专属剧本） */
 export interface HostEntry {
@@ -42,7 +44,7 @@ export interface HostEntry {
     name: string;
     /** 头像：单个 emoji 字符或 data:image/* 数据 URL */
     avatar: string;
-    /** 专属语录：该接待员自己的七神态台词库 */
+    /** 专属语录：该接待员自己的台词库（daily/done/failed 三组） */
     lines: LinesConfig;
     /** 启用：false=不参与觉醒（下台不删档） */
     enabled: boolean;
@@ -56,8 +58,6 @@ export interface AppearanceConfig {
     /** 上传过的头像存档池（跨接待员共享，最近的在前；方便换形象时直接取用） */
     avatars: string[];
 }
-/** 神态固定顺序（校验遍历与 UI 分组展示共用） */
-export declare const DEMEANORS: readonly Demeanor[];
 /** 迁移/默认时内建的第一位接待员（id 固定，供 manualHostId 引用） */
 export declare const DEFAULT_HOST_ID = "dolores";
 /**

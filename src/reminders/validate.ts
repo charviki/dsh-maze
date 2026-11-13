@@ -6,7 +6,7 @@
  */
 
 import { parseCron } from './cron.js';
-import { compileWhen, normalizeRule, type RuleDef } from './engine.js';
+import { compileWhen, migrateRuleInput, normalizeRule, type RuleDef } from './engine.js';
 
 /** 校验选项：when/locked 是文件级信任（用户自己的 config/store），HTTP 来源一律拒绝 */
 export interface ValidateRuleOptions {
@@ -18,9 +18,10 @@ export interface ValidateRuleOptions {
 
 /** 校验单条规则（输入为任意 JSON 反序列化形状），返回规范化后的定义 */
 export function validateRule(raw: unknown, opts: ValidateRuleOptions = {}): RuleDef {
-  // PUT 路由的 body / 手改的 store 文件都来自 JSON 反序列化，这里做一次形状收敛
+  // PUT 路由的 body / 手改的 store 文件都来自 JSON 反序列化，这里做一次形状收敛；
+  // 旧匹配字段（patternMode/excludeModelPattern）先迁移成正则-only 形态再校验
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('规则必须是对象');
-  const r = raw as Record<string, unknown>;
+  const r = migrateRuleInput(raw as Record<string, unknown>);
 
   // 触发源先验原始值：拼错的 trigger（如 'corn'）不得被 normalize 静默归为 model-call
   if (r.trigger !== undefined && r.trigger !== 'model-call' && r.trigger !== 'cron') {
@@ -40,7 +41,6 @@ export function validateRule(raw: unknown, opts: ValidateRuleOptions = {}): Rule
       throw new Error(`规则 ${typeof r.id === 'string' ? r.id : '?'} 的 ${field} 必须是字符串`);
     }
   }
-  if (r.modelPattern === '') throw new Error('规则 modelPattern 不能为空');
 
   // 数值字段先验原始类型与整数性：错误类型（如 startHour:"9"、maxPerDay:1.5）
   // 应报错而非被默认值静默替换（cooldown 允许任意有限数，其余须为整数）
@@ -75,6 +75,15 @@ export function validateRule(raw: unknown, opts: ValidateRuleOptions = {}): Rule
     throw new Error('locked 标记仅允许在配置文件中使用');
   }
 
+  // 匹配正则装载即编译：语法错误当场暴露（i 标志；空串=匹配一切，合法）
+  if (typeof r.modelPattern === 'string' && r.modelPattern !== '') {
+    try {
+      new RegExp(r.modelPattern, 'i');
+    } catch (err) {
+      throw new Error(`规则 ${typeof r.id === 'string' ? r.id : '?'} 的 modelPattern 不是合法正则：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const rule = normalizeRule(r);
   if (rule.id === '') throw new Error('规则缺少 id');
   if (rule.message === '') throw new Error(`规则 ${rule.id} 缺少 message`);
@@ -84,9 +93,10 @@ export function validateRule(raw: unknown, opts: ValidateRuleOptions = {}): Rule
       throw new Error(`规则 ${rule.id} ${field} 必须为 ${lo}-${hi} 的整数`);
     }
   }
-  // normalizeRule 语义上必填默认值，但类型仍可选（RuleDef 服务于部分形状的配置）——比较处用 ?? 收敛
-  if ((rule.startHour ?? 0) >= (rule.endHour ?? 24)) {
-    throw new Error(`规则 ${rule.id} startHour 必须小于 endHour`);
+  // normalizeRule 语义上必填默认值，但类型仍可选（RuleDef 服务于部分形状的配置）——比较处用 ?? 收敛。
+  // startHour > endHour 是合法的跨午夜窗口（18→14 = 18:00 到次日 13:59）；相等则窗口为空，按配置错误拒绝
+  if ((rule.startHour ?? 0) === (rule.endHour ?? 24)) {
+    throw new Error(`规则 ${rule.id} startHour 与 endHour 不能相等（全天生效请用 0–24）`);
   }
   if (rule.trigger === 'cron') {
     // cron 规则装载即解析，表达式错误当场暴露

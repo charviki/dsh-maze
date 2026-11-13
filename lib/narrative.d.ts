@@ -31,3 +31,11 @@ export declare function narrativeEventToDemeanor(eventType: string, reasonKind?:
  * @param now 当前时间戳（ms）
  */
 export declare function currentDemeanor(record: DemeanorRecord | undefined, now: number): Demeanor;
+/** 挑选某会话的神态记录：会话已知时只看它自己的桶——没有桶 = undefined
+ *  （客户端兜底 idle），绝不回退到别的会话的记录（后台会话跑任务时，正在
+ *  查看的静止会话不能被污染成后台神态）。仅会话 id 缺失（旧运行时拿不到
+ *  useSessions）时才回退全局最近活跃，保持单会话体验不变。
+ *  @param bySession 各会话的神态桶
+ *  @param sessionId 当前查看的会话 id；undefined=未知
+ */
+export declare function pickDemeanorRecord(bySession: ReadonlyMap<string, DemeanorRecord>, sessionId: string | undefined): DemeanorRecord | undefined;
