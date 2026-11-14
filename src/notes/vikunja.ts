@@ -2,11 +2,13 @@
  * Vikunja 实现 NoteStore（防腐层的第一个后端）。
  *
  * 概念映射（对领域层不可见）：
- * - 小记池 = Inbox 项目（按标题发现，缺失即建）；id 由调用方持久化加速二次装载
+ * - 小记池 = Inbox 项目（按标题发现，缺失即建；多同名时取 id 最小者＝共享池，
+ *   见 ensureInbox 注释）；id 由调用方持久化加速二次装载
  * - 小记 = Inbox 中未完成且无 assignee 的任务；速记首行作 title 其余作 description
  * - 分配 = Vikunja assignee（机器名 = 机器用户名）；进行中 = start_date 非空
  *
- * 凭据：scoped API Token（Bearer）。错误统一包装为中文 message（路由层直接透出）。
+ * 凭据：scoped API Token（Bearer）。错误统一包装为中文 message（路由层直接透出），
+ * HTTP 错误抛 VikunjaError（带 status/code，供"钉死的 Inbox 失效"自愈判定）。
  */
 
 import {
@@ -18,6 +20,18 @@ import {
   type Note,
   type NoteStore,
 } from './store.js';
+
+/** Vikunja HTTP 错误：status/code 供调用方区分"项目进回收站(3018)/不存在(404)"等可自愈情形 */
+export class VikunjaError extends Error {
+  readonly status: number;
+  readonly code: number | undefined;
+
+  constructor(message: string, status: number, code: number | undefined) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 /** Vikunja 连接参数；inboxProjectId 可选（缺省自动发现/创建） */
 export interface VikunjaOptions {
@@ -64,27 +78,35 @@ export class VikunjaNoteStore implements NoteStore {
     }
     if (!res.ok) {
       let detail = '';
+      let code: number | undefined;
       try {
-        const payload = await res.json() as { message?: unknown };
+        const payload = await res.json() as { message?: unknown; code?: unknown };
         if (typeof payload.message === 'string') detail = payload.message;
+        if (typeof payload.code === 'number') code = payload.code;
       } catch {
         // 非 JSON 错误体（如反代 502 的 HTML）：留空，状态码已足够排查
       }
       const hint = res.status === 401 ? '（token 无效或已过期）' : '';
-      throw new Error(`Vikunja HTTP ${res.status}${hint}: ${detail}`);
+      throw new VikunjaError(`Vikunja HTTP ${res.status}${hint}: ${detail}`, res.status, code);
     }
     return await res.json() as T;
   }
 
-  /** Inbox 项目 id：配置持久化的直用；否则按标题发现，缺失即建（幂等） */
+  /** Inbox 项目 id：配置持久化的直用；否则按标题发现，缺失即建（幂等）。
+   *  实证（2026-11-14 dev 实例实验）：Vikunja 会为每个首次密码登录的用户自动配发
+   *  一套私人 "Inbox" 项目 + "My Open Tasks" 筛选器，与共享池同名并存（先共享也拦不住）。
+   *  多个同名时取 id 最小者——共享池由管理员最先创建故 id 最小，各机器才能一致命中
+   *  同一个池，而不是各自漂到私人副本上。 */
   private async ensureInbox(): Promise<number> {
     if (this.inboxId !== undefined) return this.inboxId;
     const projects = await this.request<unknown[]>('GET', '/projects');
-    const hit = (Array.isArray(projects) ? projects : []).find(
-      p => typeof p === 'object' && p !== null && (p as { title?: unknown }).title === 'Inbox',
-    );
-    const id = hit !== undefined
-      ? (hit as { id?: unknown }).id
+    const candidates = (Array.isArray(projects) ? projects : [])
+      .filter(p => typeof p === 'object' && p !== null && (p as { title?: unknown }).title === 'Inbox')
+      .map(p => (p as { id?: unknown }).id)
+      .filter((id): id is number => typeof id === 'number')
+      .sort((a, b) => a - b);
+    const id = candidates.length > 0
+      ? candidates[0]
       : (await this.request<{ id?: unknown }>('PUT', '/projects', { title: 'Inbox' })).id;
     if (typeof id !== 'number') throw new Error('Vikunja 返回的 Inbox 项目缺少数字 id');
     this.inboxId = id;
@@ -92,18 +114,36 @@ export class VikunjaNoteStore implements NoteStore {
     return id;
   }
 
+  /** 钉死的 Inbox 失效自愈：持久化的 id 可能指向已删除/进回收站的项目
+   *  （实证：配置钉住私人 Inbox 后该 Inbox 被清理，列表一直报 3018）。
+   *  命中 404/3018 时丢弃旧 id 重新解析（ensureInbox 会确定性取回共享池）并重试一次。 */
+  private async withInbox<T>(fn: (inbox: number) => Promise<T>): Promise<T> {
+    const inbox = await this.ensureInbox();
+    try {
+      return await fn(inbox);
+    } catch (err) {
+      if (err instanceof VikunjaError && (err.status === 404 || err.code === 3018)) {
+        this.inboxId = undefined;
+        const fresh = await this.ensureInbox();
+        return await fn(fresh);
+      }
+      throw err;
+    }
+  }
+
   /** Inbox 全量任务（分页拉全；本地量级一两页） */
   private async listInboxTasks(): Promise<Record<string, unknown>[]> {
-    const inbox = await this.ensureInbox();
-    const all: Record<string, unknown>[] = [];
-    for (let page = 1; page <= 20; page++) {
-      // 全量拉取后领域侧过滤：小记/任务的区分是领域谓词，不在存储侧重复一套过滤语法
-      const batch = await this.request<unknown>('GET', `/projects/${String(inbox)}/tasks?page=${String(page)}&per_page=${String(PAGE_SIZE)}`);
-      const tasks = Array.isArray(batch) ? batch as Record<string, unknown>[] : [];
-      all.push(...tasks);
-      if (tasks.length < PAGE_SIZE) break;
-    }
-    return all;
+    return await this.withInbox(async inbox => {
+      const all: Record<string, unknown>[] = [];
+      for (let page = 1; page <= 20; page++) {
+        // 全量拉取后领域侧过滤：小记/任务的区分是领域谓词，不在存储侧重复一套过滤语法
+        const batch = await this.request<unknown>('GET', `/projects/${String(inbox)}/tasks?page=${String(page)}&per_page=${String(PAGE_SIZE)}`);
+        const tasks = Array.isArray(batch) ? batch as Record<string, unknown>[] : [];
+        all.push(...tasks);
+        if (tasks.length < PAGE_SIZE) break;
+      }
+      return all;
+    });
   }
 
   async testConnection(): Promise<string> {
@@ -113,10 +153,11 @@ export class VikunjaNoteStore implements NoteStore {
   }
 
   async quickAdd(text: string): Promise<Note> {
-    const inbox = await this.ensureInbox();
     const { title, description } = splitQuickNote(text);
     if (title === '') throw new Error('速记内容为空');
-    const task = await this.request<Record<string, unknown>>('PUT', `/projects/${String(inbox)}/tasks`, { title, description });
+    const task = await this.withInbox(
+      inbox => this.request<Record<string, unknown>>('PUT', `/projects/${String(inbox)}/tasks`, { title, description }),
+    );
     return noteFromTask(task);
   }
 
@@ -127,9 +168,8 @@ export class VikunjaNoteStore implements NoteStore {
 
   async promote(noteId: number, machine: string): Promise<Note> {
     if (machine.trim() === '') throw new Error('机器名不能为空');
-    const inbox = await this.ensureInbox();
     // 机器名（=用户名）→ user_id：Inbox 的可访问用户表里查（token 无需全局 users 权限）
-    const users = await this.request<unknown>('GET', `/projects/${String(inbox)}/projectusers`);
+    const users = await this.withInbox(inbox => this.request<unknown>('GET', `/projects/${String(inbox)}/projectusers`));
     const hit = (Array.isArray(users) ? users : []).find(
       u => typeof u === 'object' && u !== null && (u as { username?: unknown }).username === machine.trim(),
     );
@@ -177,5 +217,11 @@ export class VikunjaNoteStore implements NoteStore {
       await this.request('PUT', `/tasks/${String(taskId)}/comments`, { comment: summary.trim() });
     }
     return note;
+  }
+
+  async deleteNote(noteId: number): Promise<void> {
+    // Vikunja 的任务删除是软删除进回收站（实证：删后 GET 返 4040 "in the trash"），
+    // 恢复走网页回收站视图（POST /api/v2/tasks/{id}/restore）；响应体 {"message":...} 正常 JSON
+    await this.request<unknown>('DELETE', `/tasks/${String(noteId)}`);
   }
 }

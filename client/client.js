@@ -58,6 +58,7 @@ const ROUTE = {
   notesTasks: '/maze/notes/tasks',
   notesStart: '/maze/notes/start',
   notesComplete: '/maze/notes/complete',
+  notesDelete: '/maze/notes/delete',
   events: '/maze/events',
 };
 
@@ -611,6 +612,8 @@ function ensureStyle() {
 .dshm-btn-ghost{background:transparent;color:var(--dsw-alias-label-secondary,#81858C);
   border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09))}
 .dshm-btn-ghost:hover{color:var(--dsw-alias-label-primary,#fff)}
+/* 小记删除两步确认态：琥珀描边，与语录/提醒删除同语义色 */
+.dshm-btn-danger{color:var(--dsw-static-amber-400,#F79D31);border-color:var(--dsw-static-amber-400,#F79D31)}
 /* ---- 设置页：文档流布局（设置外壳负责页面滚动） ---------------------- */
 .dshm-page{font-size:13px;color:var(--dsw-alias-label-primary,#fff);max-width:720px}
 .dshm-page-intro{display:flex;align-items:center;gap:6px;font-size:12px;
@@ -2069,6 +2072,10 @@ function NotesModule() {
         machines: draft.machines.filter((m) => m !== ''),
       });
       setDraft((cur) => ({ ...cur, token: '' }));
+      // 连接成功后机器名以服务端识别的 token 身份为准回填草稿（手误自动纠正）
+      if (result.connected && typeof result.machineName === 'string') {
+        setDraft((cur) => ({ ...cur, machineName: result.machineName }));
+      }
       // 服务器对"清空 baseUrl/token"的重置保存返回 connected:false 且不带 user：
       // 不区分就会显示成"已连接（undefined）"，必须按连接结果分支反馈
       setMsg(result.connected ? `已连接（${result.user}）` : '已保存（未连接：baseUrl 与 token 均为空）');
@@ -2085,6 +2092,30 @@ function NotesModule() {
   const [promotingId, setPromotingId] = useState(null);
   /** 连接编辑态：已连接时表单默认收起（信息进徽标行，改配置点「编辑」展开） */
   const [editingConn, setEditingConn] = useState(false);
+  /** 删除两步确认：首点武装（2.5s 无操作自动解除，与提醒/语录删除一致的误触保护），再点才执行 */
+  const [armedDeleteId, setArmedDeleteId] = useState(null);
+  useEffect(() => {
+    if (armedDeleteId === null) return undefined;
+    const timer = window.setTimeout(() => setArmedDeleteId(null), 2500);
+    return () => { window.clearTimeout(timer); };
+  }, [armedDeleteId]);
+
+  const removeNote = async (id) => {
+    setArmedDeleteId(null);
+    setMsg('');
+    try {
+      await postJson(ROUTE.notesDelete, { id });
+      await refresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** 删除按钮：两步确认（武装态琥珀高亮提示这是破坏性第二次点击） */
+  const deleteButton = (id) => h('button', {
+    className: `dshm-btn${armedDeleteId === id ? ' dshm-btn-danger' : ' dshm-btn-ghost'}`,
+    onClick: () => (armedDeleteId === id ? removeNote(id) : setArmedDeleteId(id)),
+  }, armedDeleteId === id ? '确认删除' : '删除');
 
   const promote = async (id, machine) => {
     setMsg('');
@@ -2130,6 +2161,7 @@ function NotesModule() {
       )
       : h('div', { className: 'dshm-note-ops' },
         h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => setPromotingId(note.id) }, '转任务'),
+        deleteButton(note.id),
       ),
   );
 
@@ -2144,6 +2176,7 @@ function NotesModule() {
     h('div', { className: 'dshm-note-ops' },
       task.started ? null : h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => taskAction(ROUTE.notesStart, task.id) }, '开工'),
       h('button', { className: 'dshm-btn dshm-btn-primary', onClick: () => taskAction(ROUTE.notesComplete, task.id) }, '完成'),
+      deleteButton(task.id),
     ),
   );
 
@@ -2183,11 +2216,11 @@ function NotesModule() {
           }),
         ),
         h('div', { className: 'dshm-field' },
-          h('span', null, '本机机器名（= Vikunja 用户名，任务认领键）'),
+          h('span', null, '本机机器名（连接后按 token 身份自动识别）'),
           h('input', {
             className: 'dshm-input',
             value: draft.machineName,
-            placeholder: 'mac-mini',
+            placeholder: '留空，连接成功后自动回填',
             onChange: (e) => setDraft({ ...draft, machineName: e.target.value }),
           }),
         ),

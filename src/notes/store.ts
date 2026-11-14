@@ -47,6 +47,8 @@ export interface NoteStore {
   startTask(taskId: number): Promise<Note>;
   /** 完成任务；summary 非空时作为完成摘要回写（v1：评论形式） */
   completeTask(taskId: number, summary?: string): Promise<Note>;
+  /** 删除：移入 Vikunja 任务回收站（误删可在 Vikunja 网页回收站页恢复） */
+  deleteNote(noteId: number): Promise<void>;
 }
 
 /** 速记切分：首行为标题（超长截断到 200 字符，Vikunja 标题上限友好），

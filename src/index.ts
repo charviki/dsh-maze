@@ -618,14 +618,18 @@ export function apply(ctx: any, config: Config): void {
       if (req.method !== 'PUT') return sendJson(res, 405, { error: 'method not allowed' });
       const body = await readJsonBody(req) as Record<string, unknown> | null | undefined;
       if (body === null || body === undefined) return sendJson(res, 400, { error: 'body 应为配置补丁对象' });
-      // 补丁合并：未提供的字段保持现值（token 只报有无，编辑页不回传旧明文）
+      // 补丁合并：未提供的字段保持现值（token 只报有无，编辑页不回传旧明文）。
+      // baseUrl 变更=换实例：旧 inboxProjectId 指向的是旧实例的项目，带上必错，弃之重解析
+      //（与 validate 同规则先去尾斜杠，避免同地址多写一个 / 被误判成换实例）
+      const baseUrlChanged = typeof body.baseUrl === 'string'
+        && body.baseUrl.trim().replace(/\/+$/, '') !== notes.baseUrl;
       let next: NotesConfig;
       try {
         next = validateNotesConfig({
           baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : notes.baseUrl,
           token: typeof body.token === 'string' && body.token !== '' ? body.token : notes.token,
           machineName: typeof body.machineName === 'string' ? body.machineName : notes.machineName,
-          ...(notes.inboxProjectId === undefined ? {} : { inboxProjectId: notes.inboxProjectId }),
+          ...(notes.inboxProjectId === undefined || baseUrlChanged ? {} : { inboxProjectId: notes.inboxProjectId }),
           machines: Array.isArray(body.machines) ? body.machines : notes.machines,
         });
       } catch (err) {
@@ -639,10 +643,13 @@ export function apply(ctx: any, config: Config): void {
         notes = next;
         try {
           const user = await noteStore().testConnection();
+          // 机器名以 token 身份为准回写：认领/指派全按"机器名=Vikunja 用户名"匹配，
+          // 手误填错的机器名会让任务永远无人认领，成功连接即校正
+          notes = { ...notes, machineName: user };
           // 预热一次列表：触发 Inbox 发现，让 inboxProjectId 当场落进配置
           await noteStore().listNotes();
           await saveNotesConfigSync(dataDir, notes);
-          return sendJson(res, 200, { connected: true, user });
+          return sendJson(res, 200, { connected: true, user, machineName: user });
         } catch (err) {
           notes = prev;
           return sendJson(res, 502, { error: `连接失败：${err instanceof Error ? err.message : String(err)}` });
@@ -703,6 +710,18 @@ export function apply(ctx: any, config: Config): void {
       }
       const summary = typeof body.summary === 'string' && body.summary.trim() !== '' ? body.summary.trim() : undefined;
       return await storeJson(res, async store => ({ note: await store.completeTask(body.id as number, summary) }));
+    }),
+    // 删除：移入 Vikunja 任务回收站（UI 两步确认；误删可在 Vikunja 网页回收站页恢复）
+    registerRoute(webCtx.webServer, '/maze/notes/delete', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { id?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.id !== 'number') {
+        return sendJson(res, 400, { error: 'body 应为 {id: number}' });
+      }
+      await storeJson(res, async store => {
+        await store.deleteNote(body.id as number);
+        return { ok: true };
+      });
     }),
     ];
     webCtx.effect(() => () => {

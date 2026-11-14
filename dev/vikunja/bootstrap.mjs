@@ -109,7 +109,9 @@ async function tokenFor(username, password) {
 
 // ---- 6. Inbox 项目 + 共享 ----
 const projects = await mustJson(await fetch(`${API}/projects`, { headers: { authorization: `Bearer ${adminToken}` } }), '列项目');
-let inbox = (Array.isArray(projects) ? projects : []).find(p => p.title === 'Inbox');
+// 多同名取 id 最小（与 src/notes/vikunja.ts ensureInbox 同规则：共享池最先建故 id 最小）
+const candidates = (Array.isArray(projects) ? projects : []).filter(p => p.title === 'Inbox').sort((a, b) => a.id - b.id);
+let inbox = candidates[0];
 if (inbox === undefined) {
   inbox = await mustJson(await fetch(`${API}/projects`, {
     method: 'PUT', headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
@@ -131,9 +133,23 @@ for (const m of machines) {
   throw new Error(`共享 Inbox 给 ${m} 失败 HTTP ${String(res.status)}: ${body}`);
 }
 
-// ---- 7. connection.json（smoke 与手工配置的数据源；gitignore 掉） ----
+// ---- 7. 机器 token + 私人 Inbox 清理 + connection.json（smoke 与手工配置的数据源；gitignore 掉） ----
+// tokenFor 的密码登录本身会触发 Vikunja v2.8 为该用户自动配发一套私人 Inbox
+//（实证：首次密码登录即配发，先共享也拦不住；删除后不复活）。
+// 私人副本与共享池同名并存，留着迟早引误配（x2robot 事故根源）——建号当场
+// 用机器自己的 token 删掉（projects 组含 delete 权限）
 const connections = {};
-for (const m of machines) connections[m] = { token: await tokenFor(m, MACHINE_PASSWORD) };
+for (const m of machines) {
+  const token = await tokenFor(m, MACHINE_PASSWORD);
+  const mine = await mustJson(await fetch(`${API}/projects`, { headers: { authorization: `Bearer ${token}` } }), `以 ${m} 列项目`);
+  const dupes = (Array.isArray(mine) ? mine : []).filter(p => p.title === 'Inbox' && p.id !== inbox.id);
+  for (const d of dupes) {
+    const res = await fetch(`${API}/projects/${String(d.id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`清理 ${m} 私人 Inbox(${String(d.id)}) 失败 HTTP ${String(res.status)}: ${await res.text()}`);
+    log(`已清理 ${m} 的私人 Inbox 副本 id=${String(d.id)}（进回收站，不复活）`);
+  }
+  connections[m] = { token };
+}
 writeFileSync(join(here, 'connection.json'), `${JSON.stringify({
   baseUrl: BASE,
   inboxProjectId: inbox.id,

@@ -81,7 +81,9 @@ window.fetch = async (input, init) => {
     if (body.token !== undefined && body.token !== '') db.config.tokenSet = true;
     if (Array.isArray(body.machines)) db.config.machines = body.machines;
     if (db.config.baseUrl === '' || !db.config.tokenSet) return json({ connected: false });
-    return json({ ok: true, saved: true, connected: true, user: db.config.machineName });
+    // 0.0.4：连接成功后机器名以 token 身份回写（假后端：留空时回填 seed 身份）
+    if (db.config.machineName === '') db.config.machineName = 'mac-mini';
+    return json({ ok: true, saved: true, connected: true, user: db.config.machineName, machineName: db.config.machineName });
   }
   if (url === '/maze/notes/list') return json({ notes: db.notes });
   if (url === '/maze/notes/add') {
@@ -107,6 +109,12 @@ window.fetch = async (input, init) => {
     task.done = true;
     db.tasks = db.tasks.filter((n) => n.id !== body.id);
     return json({ note: task });
+  }
+  if (url === '/maze/notes/delete') {
+    // 服务端语义：软删除进 Vikunja 回收站；假后端只维护"从两个池移除"这一点
+    db.notes = db.notes.filter((n) => n.id !== body.id);
+    db.tasks = db.tasks.filter((n) => n.id !== body.id);
+    return json({ ok: true });
   }
   if (url === '/maze/reminders/ack' || url === '/maze/reminders/preview') return json({ ok: true });
   return json({ error: 'harness 未模拟的路由: ' + url });

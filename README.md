@@ -83,23 +83,31 @@ dsh plugin --profile <profile> add file:/path/to/dsh-maze
   出现在那台机器的「本机任务」里。
 - **本机任务**：分配给本机机器名的任务列在这里，可**开工**（标记进行中）/
   **完成**。
+- **删除**：小记/任务卡上均有删除（两步确认防误触）；删除是软删除进 Vikunja
+  回收站，误删可在网页端回收站页恢复。
 - **生命周期**：小记（未分配）→ 任务（已分配未完成）→ 进行中（start_date
-  非空）→ 完成（done，可带摘要评论）。全部落 Vikunja，手机/网页端也能看。
+  非空）→ 完成（done，可带摘要评论）→ 删除（回收站，网页可恢复）。全部落
+  Vikunja，手机/网页端也能看。
+- **机器名自动识别**：连接成功后按 token 身份自动回填（机器名=Vikunja 用户名，
+  任务认领键，手误自动纠正），配置时留空即可。
+- **Inbox 容错**：多同名 Inbox（Vikunja 会为首次密码登录的用户配发私人副本）
+  确定性取 id 最小=共享池；钉死的 id 失效（项目被删/进回收站）自动重解析自愈。
 
 **首次搭建**（本地 Docker，见 `dev/vikunja/`）：
 
 ```sh
 cd dev/vikunja
 node bootstrap.mjs [机器用户名 …]   # 默认 mac-mini：起容器、建用户/token/Inbox
-node route-smoke.mjs                # 活体路由冒烟：假 ctx 驱动 apply()，速记→转任务→开工→完成全链路
+node route-smoke.mjs                # 活体路由冒烟：假 ctx 驱动 apply()，速记→转任务→开工→完成→删除全链路
 # 渲染层冒烟（repo 根另起终端: python3 -m http.server 8124 --directory <repo 根>）：
 node dev/ui-preview/smoke.mjs       # jsdom 驱动真实 client.js：小记 Tab 全交互断言
 # 目检：浏览器开 http://127.0.0.1:8124/dsh-maze/dev/ui-preview/（假宿主页）
 ```
 
-然后在设置页「小记」填 `http://localhost:3456`、机器名与 `connection.json`
-里的 token，保存即连。多机接入：每台机器建自己的 Vikunja 用户（或重复跑
-bootstrap 指定新机器名），token 各自持有。
+然后在设置页「小记」填 `http://localhost:3456` 与 `connection.json`
+里的 token（机器名留空自动回填），保存即连。多机接入：每台机器建自己的
+Vikunja 用户（或重复跑 bootstrap 指定新机器名），token 各自持有；bootstrap
+会顺手删掉登录配发的私人 Inbox 副本（避免与共享池同名混淆）。
 
 **云端部署**（现役实例：阿里云 aliyun-ubuntu，端口只绑 tailscale0，公网零暴露）：
 服务器自持 compose，与本地版的差异仅两点——`ports` 改绑 `<tailnet IP>:3456:3456`；
