@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>dsh-maze 客户端假宿主预览（渲染层冒烟）</title>
+<!--
+  目的：不依赖 dsh 桌面应用，单独渲染 client/client.js 的两个槽位组件，
+  验证渲染层（MazeSection 的 小记 Tab、DoloresOverlay）与 fetch 接线。
+  与 dev/vikunja/route-smoke.mjs（服务端路由层）互补，服务两个开发场景：
+  1) 改 UI 时的即时预览；2) GUI 未重启时的渲染层回归。
+
+  用法（repo 根目录起静态服务，让 client.js 与 fixtures 同源可达）：
+    python3 -m http.server 8124 --directory <repo 根>
+    浏览器打开 http://127.0.0.1:8124/dsh-maze/dev/ui-preview/
+  fixtures/*.json 抓自运行中应用的 /maze/appearance 与 /maze/reminders/state
+  （appearance 已把 base64 头像换成 1px 占位）。/maze/notes/* 由页内内存
+  后端模拟，负载形状与 src/index.ts 路由实测一致。
+-->
+<style>
+  body { margin: 0; background: #f5f6f7; font-family: system-ui, sans-serif; }
+  /* 模拟设置面板容器：限宽居中，别让插件样式假设整页宽度 */
+  #settings-root { max-width: 640px; margin: 24px auto; background: #fff;
+    border: 1px solid #e3e5e8; border-radius: 12px; padding: 16px; min-height: 400px; }
+  #harness-note { max-width: 640px; margin: 8px auto 0; color: #888; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="settings-root"></div>
+<div id="overlay-root"></div>
+<div id="harness-note">假宿主预览：/maze/notes/* 为页内内存后端；appearance 与 reminders 状态为抓取的静态 fixtures</div>
+
+<!-- react UMD 直接用主仓 apps/web 的安装副本（React 18.3.1），零联网 -->
+<script src="/apps/web/node_modules/react/umd/react.production.min.js"></script>
+<script src="/apps/web/node_modules/react-dom/umd/react-dom.production.min.js"></script>
+
+<script>
+'use strict';
+/* ==== 假宿主环境：必须在 client.js 求值前装好 ==== */
+
+// 客户端装载协议：真实宿主用它收模块定义，这里捕获后手动驱动
+const capturedDefs = [];
+window.__ModuleLoader__ = { load: (def) => { capturedDefs.push(def); } };
+
+// 渲染层冒烟关注"组件没崩 + 接线正确"，页面报错全记录供断言
+window.__errors = [];
+window.addEventListener('error', (e) => { window.__errors.push(String(e.message ?? e)); });
+const origConsoleError = console.error.bind(console);
+console.error = (...a) => { window.__errors.push(a.map(String).join(' ')); origConsoleError(...a); };
+
+/* 页内内存后端：负载形状 = src/index.ts 路由实测（GET config 脱敏视图等） */
+const db = {
+  config: { baseUrl: 'http://localhost:3456', machineName: 'mac-mini', tokenSet: true, inboxProjectId: 12, machines: ['mac-mini', 'mbp'] },
+  notes: [
+    { id: 101, title: '调研 TriliumNext', description: '概念重，v1 不用', createdAt: '2026-11-11T08:00:00Z', updatedAt: '2026-11-11T08:30:00Z', done: false, assignees: [], started: false },
+    { id: 102, title: '问下公网认证方案', description: '', createdAt: '2026-11-11T09:00:00Z', updatedAt: null, done: false, assignees: [], started: false },
+  ],
+  tasks: [
+    { id: 103, title: '跑通 route-smoke', description: '假 ctx 驱动 apply()', createdAt: '2026-11-11T07:00:00Z', updatedAt: '2026-11-11T07:10:00Z', done: false, assignees: ['mac-mini'], started: true },
+    { id: 104, title: '补 README 小记章节', description: '', createdAt: '2026-11-11T06:00:00Z', updatedAt: null, done: false, assignees: ['mac-mini'], started: false },
+  ],
+};
+window.__notesDb = db;
+window.__fetchLog = [];
+
+const json = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
+const realFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input.url;
+  if (!url.startsWith('/maze/')) return realFetch(input, init); // fixtures 等静态文件放行
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const body = init?.body !== undefined ? JSON.parse(init.body) : undefined;
+  window.__fetchLog.push({ method, path: url, body });
+  if (url === '/maze/appearance') return realFetch('/dsh-maze/dev/ui-preview/fixtures/appearance.json');
+  if (url.startsWith('/maze/reminders/state')) return realFetch('/dsh-maze/dev/ui-preview/fixtures/state.json');
+  if (url === '/maze/notes/config') {
+    if (method === 'GET') return json({ ...db.config });
+    // PUT：token 留空=保留旧值；baseUrl 与 token 均空=重置路径，服务端
+    // 跳过连接测试直接落盘，返回 connected:false 且不带 user（src/index.ts PUT 语义）
+    if (body.baseUrl !== undefined) db.config.baseUrl = body.baseUrl;
+    if (body.machineName !== undefined) db.config.machineName = body.machineName;
+    if (body.token !== undefined && body.token !== '') db.config.tokenSet = true;
+    if (Array.isArray(body.machines)) db.config.machines = body.machines;
+    if (db.config.baseUrl === '' || !db.config.tokenSet) return json({ connected: false });
+    return json({ ok: true, saved: true, connected: true, user: db.config.machineName });
+  }
+  if (url === '/maze/notes/list') return json({ notes: db.notes });
+  if (url === '/maze/notes/add') {
+    const lines = body.text.split('\n');
+    const note = { id: 200 + db.notes.length, title: lines[0], description: lines.slice(1).join('\n'),
+      createdAt: new Date().toISOString(), updatedAt: null, done: false, assignees: [], started: false };
+    db.notes.unshift(note);
+    return json({ note });
+  }
+  if (url === '/maze/notes/promote') {
+    const note = db.notes.find((n) => n.id === body.id);
+    note.assignees = [body.machine]; // 服务端语义：留在 Inbox 且带 assignee
+    return json({ note });
+  }
+  if (url === '/maze/notes/tasks') return json({ tasks: db.tasks });
+  if (url === '/maze/notes/start') {
+    const task = db.tasks.find((n) => n.id === body.id);
+    task.started = true;
+    return json({ note: task });
+  }
+  if (url === '/maze/notes/complete') {
+    const task = db.tasks.find((n) => n.id === body.id);
+    task.done = true;
+    db.tasks = db.tasks.filter((n) => n.id !== body.id);
+    return json({ note: task });
+  }
+  if (url === '/maze/reminders/ack' || url === '/maze/reminders/preview') return json({ ok: true });
+  return json({ error: 'harness 未模拟的路由: ' + url });
+};
+
+// SSE：假宿主无事件流。客户端对 EventSource 失败有轮询兜底，静默桩即可
+window.EventSource = class { constructor() {} close() {} addEventListener() {} };
+</script>
+
+<!-- 被测对象本体：真实 client/client.js，不做任何改动 -->
+<script src="/dsh-maze/client/client.js"></script>
+
+<script>
+'use strict';
+/* ==== 驱动：手动执行捕获的模块定义并渲染两个槽位 ==== */
+const React = window.React;
+const ReactDOM = window.ReactDOM;
+
+// 宿主冻结模块表：react 全局 UMD；DisclosureRow 按宿主用法契约自绘最小实现
+// （行点击展开/aria/插槽 class 透传——客户端只依赖这些行为）
+function DisclosureRow(props) {
+  return React.createElement('div', { className: props.className },
+    React.createElement('div', {
+      className: props.rowClassName, role: 'button', tabIndex: 0,
+      'aria-expanded': String(props.open === true),
+      onClick: props.expandOnRowClick === true ? props.onToggle : undefined,
+      onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') props.onToggle(); },
+    },
+      React.createElement('span', { className: props.leadingClassName }, props.icon),
+      React.createElement('span', { className: props.titleClassName }, props.title),
+      props.expandable === true
+        ? React.createElement('span', { className: props.chevronClassName }, props.open === true ? '▾' : '▸')
+        : null,
+    ),
+    props.open === true ? props.children : null,
+  );
+}
+const requireShim = (name) => {
+  if (name === 'react') return React;
+  if (name === '@deepseek-ai/dsh-client-ui-primitives') return { DisclosureRow };
+  throw new Error('假宿主未冻结模块: ' + name);
+};
+
+const clientExports = capturedDefs[0].factory(requireShim);
+if (typeof clientExports.apply !== 'function') throw new Error('client.js 未导出 apply');
+
+// 迷你 cordis：只实现客户端用到的 ctx.inject(['slots']) + slots.register
+const registered = [];
+const fakeCtx = {
+  inject: (deps, cb) => cb({
+    slots: {
+      register: (def, comp) => { registered.push({ def, comp }); },
+      inject: (slot, thunk) => { thunk(); },
+    },
+  }),
+};
+clientExports.apply(fakeCtx);
+
+const settings = registered.find((r) => r.def.name === 'settings.section');
+const overlay = registered.find((r) => r.def.name === 'shell.overlay');
+if (settings === undefined || overlay === undefined) throw new Error('槽位未注册齐全');
+
+ReactDOM.createRoot(document.getElementById('settings-root')).render(React.createElement(settings.comp));
+ReactDOM.createRoot(document.getElementById('overlay-root')).render(React.createElement(overlay.comp));
+window.__harnessReady = true;
+</script>
+</body>
+</html>

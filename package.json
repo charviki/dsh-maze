@@ -1,6 +1,6 @@
 {
   "name": "dsh-maze",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "西部世界风接待员（多主机名册·随机觉醒）：常驻桌面伙伴，镜像会话神态并低语，支持 cron 与模型调用条件提醒、应用外观个性化",
   "license": "MIT",
   "author": "charviki",
@@ -45,7 +45,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test lib/reminders/engine.test.js lib/reminders/cron.test.js lib/reminders/store.test.js lib/reminders/validate.test.js lib/appearance.test.js lib/narrative.test.js lib/index.test.js",
+    "test": "npm run build && node --test lib/notes/store.test.js lib/notes/config.test.js lib/reminders/engine.test.js lib/reminders/cron.test.js lib/reminders/store.test.js lib/reminders/validate.test.js lib/appearance.test.js lib/narrative.test.js lib/index.test.js",
     "prepack": "npm run build"
   },
   "engines": {

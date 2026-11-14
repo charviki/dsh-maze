@@ -51,6 +51,13 @@ const ROUTE = {
   rule: '/maze/reminders/rule',
   preview: '/maze/reminders/preview',
   appearance: '/maze/appearance',
+  notesConfig: '/maze/notes/config',
+  notesList: '/maze/notes/list',
+  notesAdd: '/maze/notes/add',
+  notesPromote: '/maze/notes/promote',
+  notesTasks: '/maze/notes/tasks',
+  notesStart: '/maze/notes/start',
+  notesComplete: '/maze/notes/complete',
   events: '/maze/events',
 };
 
@@ -624,6 +631,24 @@ function ensureStyle() {
 .dshm-sec-title{font-size:11px;font-weight:600;margin-bottom:8px;
   color:var(--dsw-alias-label-tertiary,#61666B);text-transform:uppercase;letter-spacing:.4px}
 .dshm-empty{color:var(--dsw-alias-label-tertiary,#61666B);padding:4px 0}
+/* 小记卡片：标题/描述/操作一行态（比规则卡更轻：无开关无徽标，meta 沉底） */
+.dshm-note-card{padding:7px 10px;border-radius:8px;
+  background:var(--dsw-alias-bg-layer-1,#232324);border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));margin-bottom:6px}
+.dshm-note-title{font-size:12.5px;color:var(--dsw-alias-label-primary,#fff);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshm-note-desc{font-size:11.5px;color:var(--dsw-alias-label-secondary,#81858C);margin-top:2px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dshm-note-meta{font-size:10.5px;color:var(--dsw-alias-label-tertiary,#61666B);margin-top:3px}
+.dshm-note-ops{display:flex;align-items:center;gap:6px;margin-top:6px}
+.dshm-note-ops .dshm-input{flex:1;min-width:0;height:26px;font-size:11.5px}
+.dshm-note-tag{font-size:10px;color:var(--dsw-alias-label-tertiary,#61666B)}
+.dshm-note-tag.on{color:var(--dsw-static-amber-400,#F79D31)}
+/* 连接状态：常驻徽标（连通性=list 拉取成功的真实信号，非仅"已保存"） */
+.dshm-conn-status{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:400;
+  text-transform:none;letter-spacing:0;margin-bottom:8px;color:var(--dsw-alias-label-secondary,#81858C)}
+.dshm-conn-status .dshm-btn{height:22px;font-size:10.5px;padding:0 8px;flex:none}
+.dshm-conn-dot{width:8px;height:8px;border-radius:4px;flex:none;background:#9CA3AF}
+.dshm-conn-dot.on{background:#22C55E}
 /* ---- 规则卡 / 历史 / 编辑器（设置页内文档流，宽度随外壳） ------------- */
 .dshm-rule{display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:8px;
   background:var(--dsw-alias-bg-layer-1,#232324);border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));margin-bottom:6px}
@@ -1979,7 +2004,252 @@ const MODULES = [
   { id: 'appearance', label: '个性化', component: AppearanceModule },
   { id: 'dolores', label: '接待员', component: DoloresModule },
   { id: 'reminders', label: '提醒', component: RemindersModule },
+  { id: 'notes', label: '小记', component: NotesModule },
 ];
+
+/*
+ * 小记模块页：多机共享速记 → 任务（存储层 Vikunja，宿主 /maze/notes/*）。
+ * 未配置时引导填连接；已配置时三区：速记 / 小记池 / 本机任务。
+ * 挂载即拉全量，操作后局部刷新（数据源在远端，不轮询）。
+ */
+function NotesModule() {
+  const [cfg, setCfg] = useState(null);
+  const [notes, setNotes] = useState(null);
+  const [tasks, setTasks] = useState(null);
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  /** 连接草稿（编辑即改，点「保存并测试」才提交；token 只报有无，编辑留空=沿用） */
+  const [draft, setDraft] = useState(null);
+
+  /** 拉全量：配置视图 + 小记池 + 本机任务；未配置时后两者 400 属预期，静默置空 */
+  const refresh = async () => {
+    const config = await requestJson('GET', ROUTE.notesConfig).catch(() => null);
+    if (config === null) return;
+    setCfg(config);
+    if (draft === null) {
+      setDraft({ baseUrl: config.baseUrl, token: '', machineName: config.machineName, machines: [...config.machines] });
+    }
+    if (config.baseUrl === '') { setNotes([]); setTasks([]); return; }
+    const [list, own] = await Promise.all([
+      requestJson('GET', ROUTE.notesList).then(r => r.notes).catch(() => null),
+      requestJson('GET', ROUTE.notesTasks).then(r => r.tasks).catch(() => null),
+    ]);
+    setNotes(list);
+    if (own !== null) setTasks(own);
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  /** 速记：⌘/Ctrl+↵ 或按钮提交；成功清输入刷列表 */
+  const quickAdd = async () => {
+    const value = text.trim();
+    if (value === '') return;
+    setBusy(true); setMsg('');
+    try {
+      await postJson(ROUTE.notesAdd, { text: value });
+      setText('');
+      await refresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 保存连接并测试：成功显示 token 对应用户名，失败把服务端错误顶到页内 */
+  const saveConfig = async () => {
+    if (draft === null) return;
+    setBusy(true); setMsg('');
+    try {
+      const result = await requestJson('PUT', ROUTE.notesConfig, {
+        ...(draft.token === '' ? {} : { token: draft.token }),
+        baseUrl: draft.baseUrl,
+        machineName: draft.machineName,
+        machines: draft.machines.filter((m) => m !== ''),
+      });
+      setDraft((cur) => ({ ...cur, token: '' }));
+      // 服务器对"清空 baseUrl/token"的重置保存返回 connected:false 且不带 user：
+      // 不区分就会显示成"已连接（undefined）"，必须按连接结果分支反馈
+      setMsg(result.connected ? `已连接（${result.user}）` : '已保存（未连接：baseUrl 与 token 均为空）');
+      if (result.connected) setEditingConn(false); // 重置保存保持表单展开，正常保存收起回摘要
+      await refresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 转任务目标 id：null=收起；展开的卡显示 机器名输入（默认本机）+ 分配 + 取消 */
+  const [promotingId, setPromotingId] = useState(null);
+  /** 连接编辑态：已连接时表单默认收起（信息进徽标行，改配置点「编辑」展开） */
+  const [editingConn, setEditingConn] = useState(false);
+
+  const promote = async (id, machine) => {
+    setMsg('');
+    try {
+      await postJson(ROUTE.notesPromote, { id, ...(machine === '' ? {} : { machine }) });
+      setPromotingId(null);
+      await refresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const taskAction = async (path, id) => {
+    setMsg('');
+    try {
+      await postJson(path, { id });
+      await refresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** 小记卡：标题/描述 + 转任务（两步：展开机器名行 → 分配） */
+  const noteCard = (note, i) => h('div', { key: `n${i}`, className: 'dshm-note-card' },
+    h('div', { className: 'dshm-note-title', title: note.title }, note.title),
+    note.description === '' ? null : h('div', { className: 'dshm-note-desc' }, note.description),
+    h('div', { className: 'dshm-note-meta' }, fmtNoteTime(note.updatedAt)),
+    promotingId === note.id
+      ? h('div', { className: 'dshm-note-ops' },
+        h('input', {
+          key: `nm${note.id}`,
+          className: 'dshm-input',
+          list: 'dshm-note-machines',
+          placeholder: '机器名',
+          defaultValue: cfg.machineName,
+        }),
+        h('button', { className: 'dshm-btn dshm-btn-primary', onClick: (e) => {
+          const input = e.currentTarget?.previousElementSibling;
+          promote(note.id, input === null || input === undefined ? '' : input.value.trim());
+        } }, '分配'),
+        // 展开后的退出途径：不看机器名的纯收起，不产生任何请求
+        h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => setPromotingId(null) }, '取消'),
+      )
+      : h('div', { className: 'dshm-note-ops' },
+        h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => setPromotingId(note.id) }, '转任务'),
+      ),
+  );
+
+  /** 任务卡：标题（进行中徽标同行）+ 开工/完成 */
+  const taskCard = (task, i) => h('div', { key: `t${i}`, className: 'dshm-note-card' },
+    h('div', { className: 'dshm-note-title', title: task.title },
+      task.title,
+      task.started ? h('span', { className: 'dshm-note-tag on', style: { marginLeft: '6px' } }, '进行中') : null,
+    ),
+    task.description === '' ? null : h('div', { className: 'dshm-note-desc' }, task.description),
+    h('div', { className: 'dshm-note-meta' }, `${task.assignees.join('、')} · ${fmtNoteTime(task.updatedAt)}`),
+    h('div', { className: 'dshm-note-ops' },
+      task.started ? null : h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => taskAction(ROUTE.notesStart, task.id) }, '开工'),
+      h('button', { className: 'dshm-btn dshm-btn-primary', onClick: () => taskAction(ROUTE.notesComplete, task.id) }, '完成'),
+    ),
+  );
+
+  if (cfg === null) return h('div', { className: 'dshm-empty' }, '…');
+  const { connected, text: statusText } = noteConnState(cfg, notes);
+  return h('div', null,
+    h('datalist', { id: 'dshm-note-machines' },
+      (draft?.machines ?? []).map((m, i) => h('option', { key: `mo${i}`, value: m }))),
+    h('div', { className: 'dshm-sec' },
+      h('div', { className: 'dshm-sec-title' }, '连接（Vikunja）'),
+      draft === null ? null : h('div', null,
+        h('div', { className: 'dshm-conn-status' },
+          h('span', { className: connected ? 'dshm-conn-dot on' : 'dshm-conn-dot' }),
+          h('span', { style: { flex: 1, minWidth: 0 } }, statusText),
+          connected && !editingConn
+            ? h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => setEditingConn(true) }, '编辑')
+            : null,
+        ),
+        connected && !editingConn ? null : h('div', null,
+        h('div', { className: 'dshm-field' },
+          h('span', null, '服务地址'),
+          h('input', {
+            className: 'dshm-input',
+            value: draft.baseUrl,
+            placeholder: 'http://localhost:3456',
+            onChange: (e) => setDraft({ ...draft, baseUrl: e.target.value }),
+          }),
+        ),
+        h('div', { className: 'dshm-field' },
+          h('span', null, `API Token${cfg.tokenSet ? '（已保存，留空沿用）' : ''}`),
+          h('input', {
+            className: 'dshm-input',
+            type: 'password',
+            value: draft.token,
+            placeholder: cfg.tokenSet ? '留空保留已存 token' : 'scoped API token',
+            onChange: (e) => setDraft({ ...draft, token: e.target.value }),
+          }),
+        ),
+        h('div', { className: 'dshm-field' },
+          h('span', null, '本机机器名（= Vikunja 用户名，任务认领键）'),
+          h('input', {
+            className: 'dshm-input',
+            value: draft.machineName,
+            placeholder: 'mac-mini',
+            onChange: (e) => setDraft({ ...draft, machineName: e.target.value }),
+          }),
+        ),
+        h('div', { className: 'dshm-editor-actions' },
+          // 已连接时的编辑才有可回退的摘要态；未连接没有可收起的对象
+          connected ? h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => { setEditingConn(false); setMsg(''); } }, '取消') : null,
+          h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy, onClick: saveConfig }, '保存并测试'),
+        ),
+        ),
+      ),
+    ),
+    // 模块级反馈行：速记/转任务/任务操作的错误若只放连接区，已连接（表单收起）时不可见
+    msg === '' ? null : h('div', { className: 'dshm-editor-msg', style: { marginBottom: '8px' } }, msg),
+    cfg.baseUrl === '' ? null : h('div', { className: 'dshm-sec' },
+      h('div', { className: 'dshm-sec-title' }, '速记'),
+      h('textarea', {
+        className: 'dshm-textarea',
+        rows: 2,
+        value: text,
+        placeholder: '一段文本即一条小记（首行作标题，⌘/Ctrl+↵ 快记）',
+        onChange: (e) => setText(e.target.value),
+        onKeyDown: (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); quickAdd(); }
+        },
+      }),
+      h('div', { className: 'dshm-editor-actions' },
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy || text.trim() === '', onClick: quickAdd }, '记下（⌘/Ctrl+↵）'),
+      ),
+    ),
+    cfg.baseUrl === '' ? h('div', { className: 'dshm-empty' }, '填好连接并保存后，这里出现共享小记池与本机任务。') : h('div', { className: 'dshm-sec' },
+      h('div', { className: 'dshm-sec-title' }, `小记池（${notes === null ? '…' : notes.length}）`),
+      notes === null ? h('div', { className: 'dshm-empty' }, '…')
+        : notes.length === 0 ? h('div', { className: 'dshm-empty' }, '暂无小记')
+          : h('div', null, notes.map(noteCard)),
+      h('div', { className: 'dshm-sec-title', style: { marginTop: '16px' } }, `本机任务（${cfg.machineName}）`),
+      tasks === null ? h('div', { className: 'dshm-empty' }, '…')
+        : tasks.length === 0 ? h('div', { className: 'dshm-empty' }, '暂无分配给本机的任务')
+          : h('div', null, tasks.map(taskCard)),
+    ),
+  );
+}
+
+/** 连接状态综合判定（提函数：组件内四分支嵌套三元链违反评审规则）。
+ *  connected 用真实拉取结果而非"配置已存"：notes 是数组 = list 请求成功，
+ *  服务端确实打到了 Vikunja；已保存但被重置（baseUrl 清空）时 notes 也是 []，
+ *  必须再排除 baseUrl 为空。 */
+function noteConnState(cfg, notes) {
+  const connected = Array.isArray(notes) && cfg.baseUrl !== '';
+  if (connected) return { connected, text: `已连接（${cfg.machineName}）@ ${cfg.baseUrl}` };
+  if (cfg.baseUrl === '') return { connected, text: '未连接：填好服务地址与 API Token 后保存' };
+  if (notes === null) return { connected, text: '连接中…' };
+  return { connected, text: '未连接：检查服务地址 / Token 后重试' };
+}
+
+/** ISO 时间 → 'MM-DD HH:mm'（速记场景只要相对新旧，不要完整时间戳） */
+function fmtNoteTime(iso) {
+  if (typeof iso !== 'string' || iso === '') return '';
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return '';
+  const p = (n) => `${n}`.padStart(2, '0');
+  return `${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
+}
 
 /**
  * 提醒模块页：规则 CRUD / 处置历史（当前模型信息不再展示，检测仍在后台进行）。

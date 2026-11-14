@@ -4,6 +4,7 @@
  * - 会话事件流 → Dolores 神态镜像（narrative.ts，供客户端微动效与台词）
  * - 规则装载校验（fail-loud）与 config/store 合并持久化（tombstone 语义见 reminders/store.ts）
  * - HTTP 路由：GET/POST /maze/reminders/{state,ack,rule,preview}、GET/PUT /maze/appearance、
+ *   GET/PUT /maze/notes/
  *   GET /maze/events（SSE 状态推送）
  * - 同源信任栅栏 + 请求体上限（回环 socket 平台免鉴权，需自挡恶意网页的
  *   cross-site fetch）
@@ -40,6 +41,8 @@ import { validateRule } from './reminders/validate.js';
 import { loadStoreSync, mergeRules, pluginRoot, resolveDataDir, saveStoreSync } from './reminders/store.js';
 import { DEFAULT_APPEARANCE, loadAppearanceSync, resolveDefaultAppearance, saveAppearanceSync, validateAppearance, type AppearanceConfig } from './appearance.js';
 import { currentDemeanor, narrativeEventToDemeanor, pickDemeanorRecord, type Demeanor, type DemeanorRecord } from './narrative.js';
+import { loadNotesConfigSync, saveNotesConfigSync, type NotesConfig, emptyNotesConfig, validateNotesConfig } from './notes/config.js';
+import { VikunjaNoteStore } from './notes/vikunja.js';
 
 export const name = 'dsh-maze';
 export const inject = ['webServer'];
@@ -203,6 +206,16 @@ export function apply(ctx: any, config: Config): void {
     ctx.logger?.warn?.(`dsh-maze appearance 读取失败，使用默认外观: ${String(err)}`);
   }
 
+  // 小记连接配置：文件缺失=未配置（UI 引导去设置页）；损坏也只降级为未配置
+  // （小记是软功能，不值得阻断插件装载），与 appearance 同策略
+  let notes: NotesConfig;
+  try {
+    notes = loadNotesConfigSync(dataDir);
+  } catch (err) {
+    notes = emptyNotesConfig();
+    ctx.logger?.warn?.(`dsh-maze notes 配置读取失败，按未配置处理: ${String(err)}`);
+  }
+
   const states = new Map<string, RuleState>();
   const pending: Reminder[] = [];
   const history: HistoryEntry[] = [];
@@ -361,6 +374,34 @@ export function apply(ctx: any, config: Config): void {
 
   // ---- HTTP 路由（软依赖：无 web 组合时静默不装）-----------------------------------
   ctx.inject(['webServer'], (webCtx: { webServer: { register: (def: { kind: 'exact'; path: string; handler: RouteHandler }) => () => void }; effect: (fn: () => () => void) => void }) => {
+    // ---- 小记（notes）路由 ----------------------------------------------------------
+    // 每请求新建 store：构造只是归一 baseUrl（无握手状态）；inboxProjectId 从
+    // 闭包 notes 提供，onInboxResolved 首次发现后回写落盘加速后续装载
+    const noteStore = () => new VikunjaNoteStore({
+      baseUrl: notes.baseUrl,
+      token: notes.token,
+      ...(notes.inboxProjectId === undefined ? {} : { inboxProjectId: notes.inboxProjectId }),
+      onInboxResolved: (id) => {
+        notes.inboxProjectId = id;
+        try {
+          saveNotesConfigSync(dataDir, notes);
+        } catch (err) {
+          // 回写失败只损失加速：内存 id 已更新，进程重启后重新发现即可
+          ctx.logger?.warn?.(`dsh-maze notes Inbox id 回写失败: ${String(err)}`);
+        }
+      },
+    });
+    // 闭包读当前值（PUT config 会整体重赋 notes，注册时求值一次会固化旧状态）
+    const notesConfigured = () => notes.baseUrl !== '' && notes.token !== '';
+    // 未配置 400、存储侧错误 502 的统一出口，避免每个路由重复 try/catch
+    const storeJson = async (res: RouteRes, fn: (store: VikunjaNoteStore) => Promise<unknown>): Promise<void> => {
+      if (!notesConfigured()) return sendJson(res, 400, { error: '小记未配置连接（设置 → 小记 → 保存并测试）' });
+      try {
+        return await sendJson(res, 200, await fn(noteStore()));
+      } catch (err) {
+        return sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
+      }
+    };
     const disposers = [
       registerRoute(webCtx.webServer, '/maze/events', (req: RouteReq, res: RouteRes) => {
         // SSE：连接即回发快照；之后 broadcastNow 推送。栅栏在 registerRoute 统一入口。
@@ -563,6 +604,106 @@ export function apply(ctx: any, config: Config): void {
         appearance = next;
         return sendJson(res, 200, appearance);
       }),
+    // 连接配置：GET 返回脱敏视图（token 只报有无不回明文）；PUT 保存并即时
+    // 测试连接（fail-loud：凭据/地址错误当场回错，不让用户带着坏配置离开设置页）
+    registerRoute(webCtx.webServer, '/maze/notes/config', async (req: RouteReq, res: RouteRes) => {
+      const notesView = () => ({
+        baseUrl: notes.baseUrl,
+        tokenSet: notes.token !== '',
+        machineName: notes.machineName,
+        ...(notes.inboxProjectId === undefined ? {} : { inboxProjectId: notes.inboxProjectId }),
+        machines: notes.machines,
+      });
+      if (req.method === 'GET') return sendJson(res, 200, notesView());
+      if (req.method !== 'PUT') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as Record<string, unknown> | null | undefined;
+      if (body === null || body === undefined) return sendJson(res, 400, { error: 'body 应为配置补丁对象' });
+      // 补丁合并：未提供的字段保持现值（token 只报有无，编辑页不回传旧明文）
+      let next: NotesConfig;
+      try {
+        next = validateNotesConfig({
+          baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : notes.baseUrl,
+          token: typeof body.token === 'string' && body.token !== '' ? body.token : notes.token,
+          machineName: typeof body.machineName === 'string' ? body.machineName : notes.machineName,
+          ...(notes.inboxProjectId === undefined ? {} : { inboxProjectId: notes.inboxProjectId }),
+          machines: Array.isArray(body.machines) ? body.machines : notes.machines,
+        });
+      } catch (err) {
+        return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+      }
+      // 配置齐了才测试连接；清空 baseUrl/token 的"重置"场景跳过测试直接落盘。
+      // 先重赋 notes 再走闭包 noteStore()：测试与预热期间 onInboxResolved 回写
+      // 的是新配置；失败则回滚旧值（内存与磁盘都不留坏配置）
+      if (next.baseUrl !== '' && next.token !== '') {
+        const prev = notes;
+        notes = next;
+        try {
+          const user = await noteStore().testConnection();
+          // 预热一次列表：触发 Inbox 发现，让 inboxProjectId 当场落进配置
+          await noteStore().listNotes();
+          await saveNotesConfigSync(dataDir, notes);
+          return sendJson(res, 200, { connected: true, user });
+        } catch (err) {
+          notes = prev;
+          return sendJson(res, 502, { error: `连接失败：${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+      notes = next;
+      try {
+        saveNotesConfigSync(dataDir, notes);
+      } catch (err) {
+        return sendJson(res, 500, { error: `小记配置保存失败: ${String(err)}` });
+      }
+      return sendJson(res, 200, { connected: false });
+    }),
+    // 小记列表（未分配，新到旧）
+    registerRoute(webCtx.webServer, '/maze/notes/list', async (_req: RouteReq, res: RouteRes) => {
+      return await storeJson(res, async store => ({ notes: await store.listNotes() }));
+    }),
+    // 速记：一段文本即一条小记（首行作标题）
+    registerRoute(webCtx.webServer, '/maze/notes/add', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { text?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.text !== 'string' || body.text.trim() === '') {
+        return sendJson(res, 400, { error: 'body 应为 {text: 非空字符串}' });
+      }
+      return await storeJson(res, async store => ({ note: await store.quickAdd(body.text as string) }));
+    }),
+    // 转任务：小记分配给机器（缺省本机机器名）
+    registerRoute(webCtx.webServer, '/maze/notes/promote', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { id?: unknown; machine?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.id !== 'number') {
+        return sendJson(res, 400, { error: 'body 应为 {id: number, machine?: string}' });
+      }
+      const machine = typeof body.machine === 'string' && body.machine.trim() !== '' ? body.machine.trim() : notes.machineName;
+      if (machine === '') return sendJson(res, 400, { error: '机器名为空（body.machine 或本机配置任填其一）' });
+      return await storeJson(res, async store => ({ note: await store.promote(body.id as number, machine) }));
+    }),
+    // 本机任务（分配给本机机器名，未完成，新到旧）
+    registerRoute(webCtx.webServer, '/maze/notes/tasks', async (_req: RouteReq, res: RouteRes) => {
+      if (notes.machineName === '') return sendJson(res, 400, { error: '本机机器名未配置（设置 → 小记）' });
+      return await storeJson(res, async store => ({ tasks: await store.claimTasks(notes.machineName) }));
+    }),
+    // 开工：标记进行中（幂等）
+    registerRoute(webCtx.webServer, '/maze/notes/start', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { id?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.id !== 'number') {
+        return sendJson(res, 400, { error: 'body 应为 {id: number}' });
+      }
+      return await storeJson(res, async store => ({ note: await store.startTask(body.id as number) }));
+    }),
+    // 完成任务：done=true；summary 非空时以评论回写
+    registerRoute(webCtx.webServer, '/maze/notes/complete', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { id?: unknown; summary?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.id !== 'number') {
+        return sendJson(res, 400, { error: 'body 应为 {id: number, summary?: string}' });
+      }
+      const summary = typeof body.summary === 'string' && body.summary.trim() !== '' ? body.summary.trim() : undefined;
+      return await storeJson(res, async store => ({ note: await store.completeTask(body.id as number, summary) }));
+    }),
     ];
     webCtx.effect(() => () => {
       for (const d of disposers) d();

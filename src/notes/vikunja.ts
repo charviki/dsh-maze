@@ -1,0 +1,181 @@
+/**
+ * Vikunja 实现 NoteStore（防腐层的第一个后端）。
+ *
+ * 概念映射（对领域层不可见）：
+ * - 小记池 = Inbox 项目（按标题发现，缺失即建）；id 由调用方持久化加速二次装载
+ * - 小记 = Inbox 中未完成且无 assignee 的任务；速记首行作 title 其余作 description
+ * - 分配 = Vikunja assignee（机器名 = 机器用户名）；进行中 = start_date 非空
+ *
+ * 凭据：scoped API Token（Bearer）。错误统一包装为中文 message（路由层直接透出）。
+ */
+
+import {
+  byUpdatedDesc,
+  isClaimedBy,
+  isUnassignedNote,
+  noteFromTask,
+  splitQuickNote,
+  type Note,
+  type NoteStore,
+} from './store.js';
+
+/** Vikunja 连接参数；inboxProjectId 可选（缺省自动发现/创建） */
+export interface VikunjaOptions {
+  baseUrl: string;
+  token: string;
+  inboxProjectId?: number;
+  /** Inbox 项目 id 首次确定时回调（调用方持久化到 notes-config 加速下次装载） */
+  onInboxResolved?: (projectId: number) => void;
+}
+
+/** 单页任务拉取上限（Vikunja max_items_per_page = 50，本地量级一页基本够用） */
+const PAGE_SIZE = 50;
+
+export class VikunjaNoteStore implements NoteStore {
+  private readonly api: string;
+  private readonly token: string;
+  private inboxId: number | undefined;
+  private readonly onInboxResolved: ((projectId: number) => void) | undefined;
+
+  constructor(opts: VikunjaOptions) {
+    // baseUrl 统一到不带尾斜杠的前缀，后续路径都从这里拼（容错用户填 host 或带 /api/v1）
+    const base = opts.baseUrl.trim().replace(/\/+$/, '');
+    this.api = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
+    this.token = opts.token.trim();
+    this.inboxId = opts.inboxProjectId;
+    this.onInboxResolved = opts.onInboxResolved;
+  }
+
+  /** 统一请求出口：JSON in/out，非 2xx 抛带服务端 message 的中文错误 */
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.api}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (err) {
+      // 网络层失败（连不上/DNS/断流）：与 HTTP 错误区分开，提示面向部署排查
+      throw new Error(`无法连接 Vikunja（${this.api}）：${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const payload = await res.json() as { message?: unknown };
+        if (typeof payload.message === 'string') detail = payload.message;
+      } catch {
+        // 非 JSON 错误体（如反代 502 的 HTML）：留空，状态码已足够排查
+      }
+      const hint = res.status === 401 ? '（token 无效或已过期）' : '';
+      throw new Error(`Vikunja HTTP ${res.status}${hint}: ${detail}`);
+    }
+    return await res.json() as T;
+  }
+
+  /** Inbox 项目 id：配置持久化的直用；否则按标题发现，缺失即建（幂等） */
+  private async ensureInbox(): Promise<number> {
+    if (this.inboxId !== undefined) return this.inboxId;
+    const projects = await this.request<unknown[]>('GET', '/projects');
+    const hit = (Array.isArray(projects) ? projects : []).find(
+      p => typeof p === 'object' && p !== null && (p as { title?: unknown }).title === 'Inbox',
+    );
+    const id = hit !== undefined
+      ? (hit as { id?: unknown }).id
+      : (await this.request<{ id?: unknown }>('PUT', '/projects', { title: 'Inbox' })).id;
+    if (typeof id !== 'number') throw new Error('Vikunja 返回的 Inbox 项目缺少数字 id');
+    this.inboxId = id;
+    this.onInboxResolved?.(id);
+    return id;
+  }
+
+  /** Inbox 全量任务（分页拉全；本地量级一两页） */
+  private async listInboxTasks(): Promise<Record<string, unknown>[]> {
+    const inbox = await this.ensureInbox();
+    const all: Record<string, unknown>[] = [];
+    for (let page = 1; page <= 20; page++) {
+      // 全量拉取后领域侧过滤：小记/任务的区分是领域谓词，不在存储侧重复一套过滤语法
+      const batch = await this.request<unknown>('GET', `/projects/${String(inbox)}/tasks?page=${String(page)}&per_page=${String(PAGE_SIZE)}`);
+      const tasks = Array.isArray(batch) ? batch as Record<string, unknown>[] : [];
+      all.push(...tasks);
+      if (tasks.length < PAGE_SIZE) break;
+    }
+    return all;
+  }
+
+  async testConnection(): Promise<string> {
+    const user = await this.request<{ username?: unknown }>('GET', '/user');
+    if (typeof user.username !== 'string') throw new Error('Vikunja /user 响应缺少 username');
+    return user.username;
+  }
+
+  async quickAdd(text: string): Promise<Note> {
+    const inbox = await this.ensureInbox();
+    const { title, description } = splitQuickNote(text);
+    if (title === '') throw new Error('速记内容为空');
+    const task = await this.request<Record<string, unknown>>('PUT', `/projects/${String(inbox)}/tasks`, { title, description });
+    return noteFromTask(task);
+  }
+
+  async listNotes(): Promise<Note[]> {
+    const notes = (await this.listInboxTasks()).map(noteFromTask).filter(isUnassignedNote);
+    return notes.sort(byUpdatedDesc);
+  }
+
+  async promote(noteId: number, machine: string): Promise<Note> {
+    if (machine.trim() === '') throw new Error('机器名不能为空');
+    const inbox = await this.ensureInbox();
+    // 机器名（=用户名）→ user_id：Inbox 的可访问用户表里查（token 无需全局 users 权限）
+    const users = await this.request<unknown>('GET', `/projects/${String(inbox)}/projectusers`);
+    const hit = (Array.isArray(users) ? users : []).find(
+      u => typeof u === 'object' && u !== null && (u as { username?: unknown }).username === machine.trim(),
+    );
+    const userId = hit !== undefined ? (hit as { id?: unknown }).id : undefined;
+    if (typeof userId !== 'number') throw new Error(`机器 "${machine.trim()}" 不在 Inbox 可访问用户中（需先在 Vikunja 建用户并共享项目）`);
+    await this.request('PUT', `/tasks/${String(noteId)}/assignees`, { user_id: userId });
+    const task = await this.request<Record<string, unknown>>('GET', `/tasks/${String(noteId)}`);
+    return noteFromTask(task);
+  }
+
+  async claimTasks(machine: string): Promise<Note[]> {
+    const tasks = (await this.listInboxTasks()).map(noteFromTask).filter(n => isClaimedBy(n, machine));
+    return tasks.sort(byUpdatedDesc);
+  }
+
+  /** Vikunja 的任务更新接口会用请求体整体覆盖 assignees（不带=清空）。
+   * 更新前取现有分配、更新后逐个补写回来，避免开工/完成把分配者抹掉。
+   * 实证：POST /tasks/{id} {start_date} 后 assignees 由 ["mac-mini"] 变 null。 */
+  private async updateKeepingAssignees(taskId: number, body: Record<string, unknown>): Promise<Note> {
+    const before = await this.request<Record<string, unknown>>('GET', `/tasks/${String(taskId)}`);
+    const beforeAssignees = Array.isArray(before.assignees) ? before.assignees : [];
+    const task = await this.request<Record<string, unknown>>('POST', `/tasks/${String(taskId)}`, body);
+    for (const a of beforeAssignees) {
+      const uid = typeof a === 'object' && a !== null ? (a as { id?: unknown }).id : undefined;
+      if (typeof uid === 'number') {
+        await this.request('PUT', `/tasks/${String(taskId)}/assignees`, { user_id: uid });
+      }
+    }
+    // 更新响应里的 assignees 是被清空的旧值；补写后重查，返回值才能如实反映归属
+    return noteFromTask(
+      beforeAssignees.length > 0
+        ? await this.request<Record<string, unknown>>('GET', `/tasks/${String(taskId)}`)
+        : task,
+    );
+  }
+
+  async startTask(taskId: number): Promise<Note> {
+    return this.updateKeepingAssignees(taskId, { start_date: new Date().toISOString() });
+  }
+
+  async completeTask(taskId: number, summary?: string): Promise<Note> {
+    const note = await this.updateKeepingAssignees(taskId, { done: true });
+    // 摘要回写走评论：done 之后 Vikunja 会把任务移出默认视图，评论是持久上下文的正位
+    if (summary !== undefined && summary.trim() !== '') {
+      await this.request('PUT', `/tasks/${String(taskId)}/comments`, { comment: summary.trim() });
+    }
+    return note;
+  }
+}

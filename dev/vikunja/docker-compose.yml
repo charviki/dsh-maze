@@ -1,0 +1,25 @@
+# 本地开发用 Vikunja（阶段一验证：单容器 SQLite，不做公网暴露）
+# 生产形态（Tailscale + PG）另行部署：现役云端实例即此形态
+services:
+  vikunja:
+    # 钉住小版本：API 行为与 bootstrap 脚本按 2.8.x 校准过
+    image: vikunja/vikunja:2.8.0
+    container_name: dsh-maze-vikunja
+    environment:
+      # 签名密钥来自 .env（bootstrap 首次生成，gitignored）；v2 起 jwtsecret 更名为 service.secret
+      VIKUNJA_SERVICE_SECRET: ${VIKUNJA_SECRET:?run bootstrap.mjs first}
+      # 对外可见地址（影响前端资源与邮件里的链接）
+      VIKUNJA_SERVICE_PUBLICURL: http://localhost:3456/
+      # 本地开发放开注册：bootstrap 需要注册 admin 与机器用户
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
+      VIKUNJA_DATABASE_TYPE: sqlite
+    ports:
+      # 0.0.0.0：给同 Wi-Fi 的手机 app 用（127.0.0.1 时只有本机可达）；
+      # 公网暴露需另行加反代/VPN（云端实例=端口只绑 Tailscale IP）
+      - "3456:3456"
+    volumes:
+      # v2 起 SQLite 库固定在 /db（库与上传附件都在此）
+      - ./db:/db
+      # 附件/头像等文件存储目录（容器内 uid=1000 无法自建 /app 子目录，挂出来）
+      - ./files:/app/vikunja/files
+    restart: unless-stopped

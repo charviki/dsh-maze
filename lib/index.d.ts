@@ -4,6 +4,7 @@
  * - 会话事件流 → Dolores 神态镜像（narrative.ts，供客户端微动效与台词）
  * - 规则装载校验（fail-loud）与 config/store 合并持久化（tombstone 语义见 reminders/store.ts）
  * - HTTP 路由：GET/POST /maze/reminders/{state,ack,rule,preview}、GET/PUT /maze/appearance、
+ *   GET/PUT /maze/notes/
  *   GET /maze/events（SSE 状态推送）
  * - 同源信任栅栏 + 请求体上限（回环 socket 平台免鉴权，需自挡恶意网页的
  *   cross-site fetch）

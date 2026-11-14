@@ -5,7 +5,7 @@ Maze 是 [DeepSeek Harness](https://github.com/) (dsh) 的常驻个人助手插�
 都住着一位醒来的接待员。
 
 当前模块：**提醒**（模型调用条件提醒 + cron 定时提醒）、**个性化**
-（应用背景图 / 透明度 / 接待员名册）。框架按模块扩展，新模块各占设置页一个 Tab。
+（应用背景图 / 透明度 / 接待员名册）与**小记**（多机共享速记 → 任务，存储层 Vikunja）。框架按模块扩展，新模块各占设置页一个 Tab。
 
 纯 UI 插件：不向模型上下文注入任何内容。
 
@@ -73,3 +73,36 @@ dsh plugin --profile <profile> add file:/path/to/dsh-maze
   错帧⚠），并按概率低语一句台词；独处久了会自语。提醒永远优先，绝不插话。
   神态按会话分桶、悬浮球跟随当前会话：多会话并行时各看各的，不再互相串台。
 
+### 小记（多机共享）
+
+速记随手丢进共享收件箱，任何一台机器把它领走变成自己的任务——存储层是
+自部署的 [Vikunja](https://vikunja.io)，体验层在设置页「小记」Tab：
+
+- **速记**：一段文本即一条小记（首行作标题，⌘/Ctrl+↵ 快记）。
+- **转任务**：给小记指定机器名（= Vikunja 用户名），它就从收件箱消失，
+  出现在那台机器的「本机任务」里。
+- **本机任务**：分配给本机机器名的任务列在这里，可**开工**（标记进行中）/
+  **完成**。
+- **生命周期**：小记（未分配）→ 任务（已分配未完成）→ 进行中（start_date
+  非空）→ 完成（done，可带摘要评论）。全部落 Vikunja，手机/网页端也能看。
+
+**首次搭建**（本地 Docker，见 `dev/vikunja/`）：
+
+```sh
+cd dev/vikunja
+node bootstrap.mjs [机器用户名 …]   # 默认 mac-mini：起容器、建用户/token/Inbox
+node route-smoke.mjs                # 活体路由冒烟：假 ctx 驱动 apply()，速记→转任务→开工→完成全链路
+# 渲染层冒烟（repo 根另起终端: python3 -m http.server 8124 --directory <repo 根>）：
+node dev/ui-preview/smoke.mjs       # jsdom 驱动真实 client.js：小记 Tab 全交互断言
+# 目检：浏览器开 http://127.0.0.1:8124/dsh-maze/dev/ui-preview/（假宿主页）
+```
+
+然后在设置页「小记」填 `http://localhost:3456`、机器名与 `connection.json`
+里的 token，保存即连。多机接入：每台机器建自己的 Vikunja 用户（或重复跑
+bootstrap 指定新机器名），token 各自持有。
+
+**云端部署**（现役实例：阿里云 aliyun-ubuntu，端口只绑 tailscale0，公网零暴露）：
+服务器自持 compose，与本地版的差异仅两点——`ports` 改绑 `<tailnet IP>:3456:3456`；
+bootstrap 建完号后把 `VIKUNJA_SERVICE_ENABLEREGISTRATION` 改 `"false"` 重建。
+Mac 侧切云端只需 `VIKUNJA_BASE=http://<tailnet IP>:3456 node dev/vikunja/bootstrap.mjs`
+重建 connection.json。
