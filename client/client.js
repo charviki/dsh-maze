@@ -163,27 +163,30 @@ function fetchAppearance(force = false) {
 
 /* ---- 外观镜像的派生工具：觉醒者解析 / 台词取用 / 克隆合并 ---------------- */
 
-/** 觉醒者在本标签页会话内的记忆键：按场次觉醒——同会话稳定，重开换人 */
+/** 觉醒者记忆键前缀：按会话分键（dsh-maze-awakened:<sessionId>）——同会话稳定
+ *  （含重载），切换会话各归各的觉醒者，新会话首次亮相才随机挑一位。 */
 const AWAKEN_KEY = 'dsh-maze-awakened';
 
 /**
  * 当前觉醒的接待员：rotate=true 时从启用者里按会话随机选一位（存
- * sessionStorage，重载不换人、新会话才换）；rotate=false 用 manualHostId
+ * sessionStorage，同会话重载不换人）；rotate=false 用 manualHostId
  * （失效/为空回落首位启用者）。名册全停用时回落内置兜底形象。
+ * sessionId 缺省（设置页等无会话上下文）用整标签页共享键，仅作展示。
  */
-function awakenedHost() {
+function awakenedHost(sessionId) {
   const enabled = appearanceState.hosts.filter((entry) => entry.enabled);
   if (enabled.length === 0) return fallbackHostEntry();
   if (!appearanceState.host.rotate) {
     const manual = enabled.find((entry) => entry.id === appearanceState.host.manualHostId);
     return manual ?? enabled[0];
   }
+  const key = sessionId ? `${AWAKEN_KEY}:${sessionId}` : AWAKEN_KEY;
   let stored = null;
-  try { stored = window.sessionStorage.getItem(AWAKEN_KEY); } catch { /* 隐私模式禁存储：每次随机，可接受 */ }
+  try { stored = window.sessionStorage.getItem(key); } catch { /* 隐私模式禁存储：每次随机，可接受 */ }
   let picked = enabled.find((entry) => entry.id === stored);
   if (picked === undefined) {
     picked = enabled[Math.floor(Math.random() * enabled.length)];
-    try { window.sessionStorage.setItem(AWAKEN_KEY, picked.id); } catch { /* 同上 */ }
+    try { window.sessionStorage.setItem(key, picked.id); } catch { /* 同上 */ }
   }
   return picked;
 }
@@ -498,11 +501,20 @@ function ensureSse() {
   es.onerror = () => { sseAlive = false; };
 }
 
-/** 台词轮播取句：按 key 游标轮播而非随机——全覆盖后才重复，不会连抽同一句 */
-function nextSpokenLine(cursors, key, pool) {
-  const i = cursors[key] ?? 0;
-  cursors[key] = (i + 1) % pool.length;
-  return pool[i % pool.length];
+/** 台词抽取：洗牌袋（shuffle bag）——袋空才把整池洗牌重装。顺序随机、整池
+ *  覆盖完才会重复（不会连抽同一句）；相比固定游标从池首顺取，重载/新会话
+ *  不会每次都撞上开头那几句（“总是那几句”的观感来源）。 */
+function nextSpokenLine(store, key, pool) {
+  let bag = store[key];
+  if (!Array.isArray(bag) || bag.length === 0) {
+    bag = pool.slice();
+    for (let i = bag.length - 1; i > 0; i--) { // Fisher–Yates 洗牌
+      const j = Math.floor(Math.random() * (i + 1));
+      [bag[i], bag[j]] = [bag[j], bag[i]];
+    }
+  }
+  store[key] = bag.slice(0, -1); // 取走袋尾一句，余量留袋
+  return bag[bag.length - 1];
 }
 
 /* ------------------------------------------------------------------ */
@@ -933,7 +945,7 @@ function DoloresOverlay(props) {
   const seen = useRef(new Set());
   /** 上次低语时间戳：切换台词限频（过渡神态 90s / 结果时刻 30s），独处自语另用更长间隔。 */
   const lastSpokenRef = useRef(0);
-  /** 台词游标（按神态分组轮播）：nextSpokenLine 的可变存储 */
+  /** 台词洗牌袋（按神态分组）：nextSpokenLine 的可变存储 */
   const lineCursorsRef = useRef({});
   /** 神态影子 ref：独处自语定时器要读“此刻”的神态，避免闭包过期。 */
   const demeanorRef = useRef('idle');
@@ -953,7 +965,7 @@ function DoloresOverlay(props) {
   const [dragging, setDragging] = useState(false);
   /** 当前觉醒接待员镜像：设为 state 并订阅外观变化——保存「指定接待员」/
    *  开关随机觉醒时，notifyAppearance 推进后立即重渲（否则要等下次神态/提醒）。 */
-  const [awakened, setAwakened] = useState(() => awakenedHost());
+  const [awakened, setAwakened] = useState(() => awakenedHost(sessionId));
 
   const size = appearanceState.host.size;
   /** 位置钳制：球保持在视口内（留 8px 边距）。尺寸在函数体内实时读
@@ -979,7 +991,7 @@ function DoloresOverlay(props) {
     const listener = (cfg) => {
       setPinned(cfg.host.pinned === true);
       setHidden(cfg.host.hidden === true);
-      setAwakened(awakenedHost());
+      setAwakened(awakenedHost(sessionIdRef.current));
     };
     appearanceListeners.add(listener);
     const navTimer = window.setInterval(patchNavIconOnce, 500);
@@ -988,6 +1000,14 @@ function DoloresOverlay(props) {
       window.clearInterval(navTimer);
     };
   }, []);
+
+  // 会话切换：觉醒者按会话分键各自记忆——切到哪个会话就还原哪个会话的觉醒者
+  //（随机觉醒下不再出现“新会话的接待员覆盖所有会话”）。影子 ref 供订阅回调用。
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    setAwakened(awakenedHost(sessionId));
+  }, [sessionId]);
 
   // 隐藏态影子同步（低语定时器用）
   useEffect(() => { hiddenRef.current = hidden; }, [hidden]);
@@ -1122,7 +1142,7 @@ function DoloresOverlay(props) {
     const resultMoment = demeanor === 'done' || demeanor === 'failed';
     if (Date.now() - lastSpokenRef.current < (resultMoment ? 30_000 : 90_000)) return;
     if (!resultMoment && Math.random() > 0.7) return;
-    const pool = linesFrom(awakenedHost(), demeanor);
+    const pool = linesFrom(awakenedHost(sessionIdRef.current), demeanor);
     if (pool === undefined || pool.length === 0) return; // 显式空组=该神态沉默
     lastSpokenRef.current = Date.now();
     setWhisper(nextSpokenLine(lineCursorsRef.current, demeanor, pool));
@@ -1142,7 +1162,7 @@ function DoloresOverlay(props) {
       if (demeanorRef.current !== 'idle' || hiddenRef.current || document.hidden) return;
       if (bubbleRef.current !== null || whisperRef.current !== null) return;
       if (Date.now() - lastSpokenRef.current < 8 * 60_000) return;
-      const pool = linesFrom(awakenedHost(), 'idle');
+      const pool = linesFrom(awakenedHost(sessionIdRef.current), 'idle');
       if (pool.length === 0) return;
       lastSpokenRef.current = Date.now();
       setWhisper(nextSpokenLine(lineCursorsRef.current, 'idle', pool));
@@ -2047,7 +2067,7 @@ function DoloresModule() {
         ),
       ),
       h('div', { className: 'dshm-hint' },
-        `随机觉醒=每个会话从启用的接待员里随机一位（本会话：${awakened.name}✦）；关闭后用指定接待员。右键悬浮球可快捷固定/隐藏。`),
+        `随机觉醒=每个会话从启用的接待员里随机一位，各会话各自记忆、互不覆盖；关闭后用指定接待员。右键悬浮球可快捷固定/隐藏。`),
     ),
     // ---- 接待员名册 ----
     h('div', { className: 'dshm-sec' },
