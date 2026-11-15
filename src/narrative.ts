@@ -13,7 +13,7 @@ export type Demeanor =
   | 'idle' // STANDBY 待机：缓慢呼吸，等待下一位访客
   | 'waiting' // GAZE 眺望：访客发出召唤，她望向叙事的下一幕
   | 'thinking' // DELIBERATE 沉思：叙事正在她脑中编织（迷宫环旋转）
-  | 'tool' // EXECUTE 执行：她按剧本精确运转（工具运行，机芯律动 dshm-tick）
+  | 'tool' // EXECUTE 执行：她按既定轨道精确运转（工具运行，机芯律动 dshm-tick）
   | 'review' // SCAN 审阅：整理记忆的碎片（上下文压缩，缓慢侧倾）
   | 'done' // NARRATIVE COMPLETE 叙事收束：金色微光 + 小跳（瞬态）
   | 'failed'; // MALFUNCTION 失灵：错帧抖动（瞬态）
@@ -25,7 +25,7 @@ export interface DemeanorRecord {
   at: number;
 }
 
-/** done/failed 是瞬态演出：超过该时长应视为回到待机 */
+/** done/failed 是瞬态表现：超过该时长应视为回到待机 */
 export const TRANSIENT_MS = 8_000;
 /** 非瞬态神态的过期时间：太久没有事件（会话挂起/断流）回到待机 */
 export const STALE_MS = 90_000;
@@ -52,7 +52,7 @@ export function narrativeEventToDemeanor(eventType: string, reasonKind?: string)
       // 上下文整理 = 她在审阅自己的记忆碎片
       return 'review';
     case 'llm/retry':
-      // 调用失败重试：闪一次失灵演出
+      // 调用失败重试：闪一次失灵表现
       return 'failed';
     case 'turn/end':
       if (reasonKind === 'completed') return 'done';

@@ -15,7 +15,7 @@ export interface DemeanorRecord {
     /** 事件时间戳（ms） */
     at: number;
 }
-/** done/failed 是瞬态演出：超过该时长应视为回到待机 */
+/** done/failed 是瞬态表现：超过该时长应视为回到待机 */
 export declare const TRANSIENT_MS = 8000;
 /** 非瞬态神态的过期时间：太久没有事件（会话挂起/断流）回到待机 */
 export declare const STALE_MS = 90000;

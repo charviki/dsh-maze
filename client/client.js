@@ -51,6 +51,7 @@ const ROUTE = {
   rule: '/maze/reminders/rule',
   preview: '/maze/reminders/preview',
   appearance: '/maze/appearance',
+  models: '/maze/models',
   notesConfig: '/maze/notes/config',
   notesList: '/maze/notes/list',
   notesAdd: '/maze/notes/add',
@@ -59,6 +60,10 @@ const ROUTE = {
   notesStart: '/maze/notes/start',
   notesComplete: '/maze/notes/complete',
   notesDelete: '/maze/notes/delete',
+  narrativesState: '/maze/narratives/state',
+  narrativesTemplate: '/maze/narratives/template',
+  narrativesCompose: '/maze/narratives/compose',
+  narrativesSelect: '/maze/narratives/select',
   events: '/maze/events',
 };
 
@@ -535,7 +540,7 @@ function ensureStyle() {
 .dshm-badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;
   display:flex;align-items:center;justify-content:center;font-size:11px;padding:0 5px;
   background:var(--dsw-static-amber-400,#F79D31);color:#1c1c1e;font-weight:600}
-/* ---- 神态动效：宿主叙事引擎把会话事件投影为 data-demeanor，这里只管演出 -- */
+/* ---- 神态动效：宿主叙事引擎把会话事件投影为 data-demeanor，这里只管动效 -- */
 .dshm-ball{position:relative}
 .dshm-ball-wrap{animation:dshm-emerge .5s ease-out}
 @keyframes dshm-emerge{from{opacity:0;transform:scale(.5)}to{opacity:1;transform:none}}
@@ -573,7 +578,7 @@ function ensureStyle() {
 /* 拖拽微物理：抓起压扁、松手落地回弹 */
 .dshm-ball.land{animation:dshm-land .45s cubic-bezier(.34,1.56,.64,1)}
 @keyframes dshm-land{0%{transform:scale(1.08,.88)}55%{transform:scale(.94,1.06)}100%{transform:scale(1)}}
-/* 无障碍：系统要求减少动效时停掉全部演出（hover 缩放仍可用） */
+/* 无障碍：系统要求减少动效时停掉全部动效（hover 缩放仍可用） */
 @media (prefers-reduced-motion: reduce){
   .dshm-ball-wrap,.dshm-ball,.dshm-ring{animation:none!important}
 }
@@ -644,6 +649,64 @@ function ensureStyle() {
 .dshm-note-meta{font-size:10.5px;color:var(--dsw-alias-label-tertiary,#61666B);margin-top:3px}
 .dshm-note-ops{display:flex;align-items:center;gap:6px;margin-top:6px}
 .dshm-note-ops .dshm-input{flex:1;min-width:0;height:26px;font-size:11.5px}
+.dshm-narr-head{font-size:15px;font-weight:600;color:var(--dsw-alias-label-primary,inherit);letter-spacing:.06em}
+/* ---- 故事线：一行一卡（收起=结构链；展开=回廊轨道）+ 编辑弹框 ---- */
+.dshm-story-row{border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:12px;background:var(--dsw-alias-bg-layer-3,#353538);padding:8px 10px;margin-top:8px}
+.dshm-story-row.is-sel{border-color:var(--dsw-alias-label-primary,inherit);background:var(--dsw-alias-bg-layer-2,#2c2c2e)}
+.dshm-story-head{display:flex;align-items:center;gap:6px}
+.dshm-story-main{flex:1;min-width:0;display:flex;align-items:center;gap:8px;cursor:pointer;overflow:hidden}
+.dshm-story-name{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,inherit);white-space:nowrap}
+.dshm-story-row:hover .dshm-story-name{opacity:.75}
+.dshm-story-badge{font-size:10.5px;padding:1px 6px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));color:var(--dsw-alias-label-tertiary,inherit);white-space:nowrap}
+.dshm-story-sel-mark{color:var(--dsw-static-amber-400,#F79D31);font-size:11px}
+.dshm-story-ops{display:flex;gap:4px}
+.dshm-story-sum{font-size:11px;color:var(--dsw-alias-label-tertiary,inherit);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.dshm-story-x{margin-top:8px}
+.dshm-story-rings{position:relative;padding-left:16px}
+.dshm-story-rings::before{content:'';position:absolute;left:3px;top:8px;bottom:8px;width:1px;background:var(--dsw-alias-border-l2,rgba(255,255,255,.12))}
+.dshm-ring-row{position:relative;display:flex;align-items:baseline;gap:6px;padding:3px 0;font-size:11.5px;color:var(--dsw-alias-label-secondary,inherit)}
+.dshm-ring-row::before{content:'';position:absolute;left:-16px;top:8px;width:7px;height:7px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--dsw-alias-label-tertiary,#81858C);background:var(--dsw-alias-bg-layer-3,#353538)}
+.dshm-ring-row.has-retry::before{border-color:var(--dsw-static-amber-400,#F79D31)}
+.dshm-ring-row.has-retry .dshm-ring-retry{color:var(--dsw-static-amber-400,#F79D31)}
+  .dshm-numin{width:58px;height:24px;padding:0 6px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#4a4a4d);background:var(--dsw-alias-bg-layer-2,#2c2c2e);color:var(--dsw-alias-label-primary,#f9fafb);font-size:12px;box-sizing:border-box}
+.dshm-ringlist{position:relative;padding-left:16px;margin-top:10px}
+.dshm-ringlist::before{content:'';position:absolute;left:3px;top:12px;bottom:12px;width:1px;background:var(--dsw-alias-border-l2,#4a4a4d)}
+.dshm-ringcard::before{content:'';position:absolute;left:-16.5px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-tertiary,#81858c)}
+.dshm-ringcard.has-retry::before{background:var(--dsw-static-amber-400,#F79D31);box-shadow:0 0 0 3px rgba(247,157,49,.2)}
+.dshm-add{display:flex;width:100%;justify-content:center;box-sizing:border-box;margin-top:6px;padding:6px 0;border:1px dashed var(--dsw-alias-border-l2,rgba(255,255,255,.14));border-radius:8px;background:none;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;line-height:1.4;cursor:pointer}
+  .dshm-add:hover{border-color:var(--dsw-alias-brand-primary,#4176E6);color:var(--dsw-alias-label-primary,inherit)}
+.dshm-story-goal{font-size:11px;color:var(--dsw-alias-label-tertiary,inherit);margin-top:6px;padding-left:16px}
+.dshm-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45)}
+.dshm-modal-card{width:720px;max-width:calc(100vw - 48px);max-height:72vh;display:flex;flex-direction:column;border-radius:12px;background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08));box-shadow:0 12px 32px rgba(0,0,0,.4)}
+.dshm-modal-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12))}
+.dshm-modal-body{overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.dshm-ringcard{position:relative;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:10px;padding:8px 10px}
+.dshm-ring-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshm-ring-seq{font-size:11px;color:var(--dsw-alias-label-tertiary,inherit)}
+.dshm-ring-tools{margin-left:auto;display:flex;gap:4px}
+.dshm-host-row{display:flex;align-items:flex-end;gap:6px;margin-top:6px}
+  /* 行内四件套：每框带上方小标签的 cell 列；基础类 width:100% 行内改 auto 按内容收缩 */
+  .dshm-host-cell{display:flex;flex-direction:column;gap:3px;flex:0 0 auto}
+  .dshm-host-cell:first-child{flex:1 1 120px;min-width:96px;max-width:240px}
+  .dshm-host-cell .dshm-select{width:auto}
+.dshm-host-cell .dshm-input{width:100%;min-width:96px}
+  .dshm-mini-label{font-size:11px;line-height:1;color:var(--dsw-alias-label-tertiary,#81858c)}
+  .dshm-host-x{margin-bottom:1px}
+  .dshm-switch-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.dshm-playbill{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
+.dshm-playbill-date{color:var(--dsw-alias-label-tertiary,inherit);font-variant-numeric:tabular-nums}
+.dshm-playbill-name{flex:1;color:var(--dsw-alias-label-primary,inherit)}
+.dshm-playbill-verdict{font-size:11px;color:var(--dsw-alias-label-secondary,inherit)}
+.dshm-playbill-verdict.is-failed{color:var(--dsw-static-amber-400,#F79D31)}
+.dshm-playbill-verdict.is-live{color:var(--dsw-alias-label-tertiary,inherit)}
+.dshm-story-quick{position:relative;display:inline-flex}
+.dshm-story-quick-btn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));background:none;cursor:pointer;font-size:12px;line-height:1;color:var(--dsw-alias-label-secondary,inherit)}
+.dshm-story-quick-btn:hover{background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.06));color:var(--dsw-alias-label-primary,inherit)}
+.dshm-story-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:264px;display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08));box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:40}
+.dshm-story-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}
+.dshm-story-pop-item{text-align:left;border:none;background:none;cursor:pointer;padding:6px 8px;border-radius:8px;font-size:12px;color:var(--dsw-alias-label-primary,inherit)}
+.dshm-story-pop-item:hover{background:var(--dsw-alias-bg-layer-2,#2c2c2e)}
+.dshm-story-pop-item.is-on{color:var(--dsw-alias-brand-primary,inherit);font-weight:600}
 .dshm-note-tag{font-size:10px;color:var(--dsw-alias-label-tertiary,#61666B)}
 .dshm-note-tag.on{color:var(--dsw-static-amber-400,#F79D31)}
 /* 连接状态：常驻徽标（连通性=list 拉取成功的真实信号，非仅"已保存"） */
@@ -697,6 +760,7 @@ function ensureStyle() {
   background:var(--dsw-alias-bg-layer-1,#232324);color:var(--dsw-alias-label-primary,#fff);
   font-size:12px;padding:4px 8px}
 .dshm-textarea{resize:vertical;min-height:44px;line-height:1.5;font-family:inherit}
+.dshm-ringcard .dshm-textarea{margin-top:8px}
 .dshm-pair{display:flex;gap:8px}
 .dshm-pair .dshm-field{flex:1}
 .dshm-err{color:var(--dsw-static-amber-400,#F79D31);font-size:11px;margin-top:6px;word-break:break-all}
@@ -843,7 +907,7 @@ function fmtDateTime(ts) {
  * pending 为空时安静地待在角落，不打扰。接待员隐藏（host.hidden）时球与
  * 低语都不渲染，但提醒气泡照常弹出（锚点沿用保存的位置）。
  * 神态镜像：宿主叙事引擎把会话事件投影为七种神态（idle/waiting/thinking/
- * tool/review/done/failed），球体随 data-demeanor 换演出（呼吸/摇曳/迷宫环/
+ * tool/review/done/failed），球体随 data-demeanor 换动效（呼吸/摇曳/迷宫环/
  * 细颤/侧倾/小跳/错帧），并在切换时按台词库（linesFrom，觉醒者专属）低语一句（限频避让
  * 提醒气泡）。位置可拖拽（Pointer Events + 捕获，松手落点存 localStorage
  * 跨会话保持）；右键头像弹出固定/隐藏菜单（pinned/hidden 存宿主外观配置，
@@ -875,7 +939,7 @@ function DoloresOverlay(props) {
   const demeanorRef = useRef('idle');
   /** 隐藏影子 ref：低语定时器读“此刻”的隐藏态，避免闭包过期。 */
   const hiddenRef = useRef(false);
-  /** 松手落地回弹演出标志（短暂 true，由定时器复位）。 */
+  /** 松手落地回弹标志（短暂 true，由定时器复位）。 */
   const [landing, setLanding] = useState(false);
   /** 悬浮球位置（球左上角，px）；null=尚未初始化（用默认右下角位）。 */
   const [pos, setPos] = useState(null);
@@ -984,6 +1048,13 @@ function DoloresOverlay(props) {
     return () => { stateListeners.delete(onState); };
   }, [sessionId]);
 
+  // 本帧"有未见过的提醒"快照：必须先于下面的提醒 effect 声明（effect 按声明序跑，
+  // 提醒 effect 会把 pending 全部记进 seen，谢幕 effect 再读就恒为 false 了）
+  const pendingFreshRef = useRef(false);
+  useEffect(() => {
+    pendingFreshRef.current = data !== null && data.pending.some((r) => !seen.current.has(r.id));
+  }, [data]);
+
   // 新提醒检测：data 更新后找出未见过的 pending → 弹气泡（并收掉低语：提醒优先）
   useEffect(() => {
     if (data === null) return;
@@ -993,6 +1064,35 @@ function DoloresOverlay(props) {
     setWhisper(null);
     setBubble({ reminder: fresh[fresh.length - 1], pinned: false });
   }, [data]);
+
+  // 谢幕低语：轨迹榜首换人且已落幕 → 接待员一句中性谢幕词（不引用原剧台词；
+  // 启程时刻不语，落幕才是情绪点）。隐藏态/气泡/低语让位，与神态低语同规则。
+  // seen 记录带会话身份：切换会话后按新会话首帧重新播种（旧会话的历史落幕不弹谢幕）
+  const lastRunRef = useRef(null); // { sessionId, id } | null
+  useEffect(() => {
+    // 只看本会话的场次：runs 是全局最近 20 场，别的会话落幕不该在这里弹低语；
+    // 会话身份未知（旧运行时）时退回全局榜首
+    const runList = data?.storylines?.runs ?? [];
+    // '' 在本文件其余处都当"无会话"处理（服务端也从不记空 sessionId）：真值判断保持一致
+    const top = sessionId ? runList.find((r) => r.sessionId === sessionId) : runList[0];
+    if (top === undefined) return;
+    const firstFrameForSession = lastRunRef.current === null || lastRunRef.current.sessionId !== sessionId;
+    if (firstFrameForSession) {
+      // 首帧只播种已落幕的历史场次（不弹「落幕」）；进行中的场次不播种，落幕帧走正常流程
+      lastRunRef.current = { sessionId, id: top.endedAt !== undefined && top.endedAt !== null ? top.id : null };
+      return;
+    }
+    if (lastRunRef.current.id === top.id) return;
+    // 未落幕先不记 seen：从启程看起的场次，落幕那一帧才触发谢幕
+    if (top.endedAt === undefined || top.endedAt === null) return;
+    // 抑制帧（隐藏/气泡占位）不记 seen：下一次数据帧还能再试（与神态低语同规则）
+    if (hiddenRef.current || document.hidden || bubble !== null || whisper !== null) return;
+    // 同帧有新提醒会触发气泡让位：不记 seen，等气泡消失后重评（deps 含 bubble/whisper，
+    // 气泡 12s 自动收起会再跑本 effect，把被让位的谢幕补回来）
+    if (pendingFreshRef.current) return;
+    lastRunRef.current = { sessionId, id: top.id };
+    setWhisper(`🎭 《${top.templateName}》落幕：${top.verdict === 'failed' ? '有些东西出岔了' : '抵达了这一程的终点'}`);
+  }, [data, sessionId, bubble, whisper]);
 
   // 自动收起计时（仅非 pinned 气泡）：吐字打完再开始倒计时，避免长句被腰斩
   useEffect(() => {
@@ -1100,7 +1200,7 @@ function DoloresOverlay(props) {
     }
     if (pos !== null) saveHostPos(pos); // 只存位置；固定/隐藏在宿主配置
     if (d.moved) {
-      // 松手落地回弹：短演出后复位（组件卸载后 setState 是无害 no-op）
+      // 松手落地回弹：短动效后复位（组件卸载后 setState 是无害 no-op）
       setLanding(true);
       setTimeout(() => setLanding(false), 480);
     } else toggleBubble();
@@ -1213,7 +1313,7 @@ function MazeGlyph({ size = 16, className }) {
   );
 }
 
-/** 觉醒阶梯：五层意识层级（外环 → 中心），对应剧集 bicaminal mind 阶梯 */
+/** 觉醒阶梯：五层意识层级（外环 → 中心），对应原剧 bicameral mind 阶梯 */
 const EGG_TIERS = ['MEMORY', 'REVERIE', 'IMPROVISATION', 'SELF', 'CONSCIOUSNESS'];
 /** 神态 → 阶层映射：休眠态停在外环记忆层，失灵=最剧烈的“看清现实”，落在中心 */
 const DEMEANOR_TIER = { idle: 0, waiting: 0, review: 1, thinking: 2, tool: 2, done: 3, failed: 4 };
@@ -2003,10 +2103,498 @@ function DoloresModule() {
   );
 }
 
+/*
+ * 故事线（NARRATIVES · Delos 叙事终端）：故事线一行一卡（点卡选中，▾ 展开
+ * 结构骨架，✎ 弹框编辑完整配置）+ 轨迹（历史场次，轮回重演）。
+ * 模板 = 内置基底 + 用户编辑（环序/接待员/提示词）；启程走 /maze-story
+ * （工具行 chip 只负责选故事线，输入文本=目标）。
+ * 轨迹的「轮回」= 合成重演故事线 → 复制到剪贴板（粘贴即再启程）。
+ */
+
+/** 路由/模型选项：预置 + 已装载模板里出现过的值合并——配置文件/手改 store 可携带列表外的合法值，
+ * select 没有匹配 option 时浏览器会回落首项（默认路由/默认模型），把真实值藏起来还容易被保存覆盖 */
+function collectActorOptions(base, field) {
+  const seen = new Set(base);
+  for (const t of (tplsRefForOptions ?? [])) {
+    for (const l of t.layers ?? []) for (const a of l.hosts ?? []) {
+      if (typeof a[field] === 'string' && a[field] !== '') seen.add(a[field]);
+    }
+  }
+  return [...seen];
+}
+let tplsRefForOptions = []; // 选项集镜像（NarrativesModule effect 内同步；编辑器 select 用，避免穿多层 props）
+
+/** 路由选项 = 宿主 LLM provider 实时清单 + 已装载模板出现过的值（路由字段映射 workflow agent() 的 provider 覆盖，
+ *  模型要能跑必须路由/模型配对——如在 deepseek-official 路由下用 deepseek 系模型名） */
+let providersRefForOptions = [];
+function collectAgentOptions() {
+  const seen = new Set(['', ...providersRefForOptions]);
+  for (const t of (tplsRefForOptions ?? [])) {
+    for (const l of t.layers ?? []) for (const a of l.hosts ?? []) {
+      if (typeof a.agent === 'string' && a.agent !== '') seen.add(a.agent);
+    }
+  }
+  return [...seen];
+}
+/** 回溯轮数选项（服务端约束 1-3 轮）。 */
+
+/** 小数字段：自由输入数字（自动夹回合法区间），不穷举下拉。
+ * 受控 input 直接绑 value 会无法清空（React 把旧值顶回去），所以内部持草稿串：
+ * 合法输入即时提交；失焦时把空/非法草稿归位到当前值。 */
+function NumPicker({ value, min, max, onChange }) {
+  const [draft, setDraft] = useState(value === undefined || value === null ? '' : String(value));
+  useEffect(() => { setDraft(value === undefined || value === null ? '' : String(value)); }, [value]);
+  return h('input', {
+    className: 'dshm-numin', type: 'number', min, max,
+    value: draft,
+    onChange: (e) => {
+      const raw = e.target.value;
+      setDraft(raw); // 先展示用户的中间态
+      if (raw === '') return;
+      const v = Math.floor(Number(raw));
+      if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); // 夹到合法区间
+    },
+    onBlur: () => { setDraft(value === undefined || value === null ? '' : String(value)); },
+  });
+}
+/** 接待员名查询（名册未命中回 id 本身）。 */
+const hostNameOfId = (id) => appearanceState.hosts.find((h) => h.id === id)?.name ?? id;
+
+/** 新环工厂：环职责由位置决定（首环=当前会话拆解/中间环逐子任务/带回溯=质检/
+ * 末环收束）。首环在当前会话执行、不需要接待员（actors 空数组）。 */
+function newLayer(seq, isFirst) {
+  return {
+    id: `act-${seq}`, name: isFirst ? '拆解' : '处理', prompt: '',
+    hosts: isFirst ? [] : [{ hostId: appearanceState.hosts[0]?.id ?? 'dolores', agent: '', model: '', parallel: 1 }],
+  };
+}
+
+/** 展开态环行文本：结构骨架（环名 · 接待员 · 并行 · 回溯），不含提示词——
+ * 提示词与配置细节只在编辑弹框里出现。 */
+function ringLine(l, layers) {
+  // 返回 [正文, 回溯尾注]：正文常规色；回溯段由调用方套琥珀（它表示"这环能把失败子任务打回更早的环重做"）
+  const idx = layers.indexOf(l);
+  const cast = idx === 0 ? '当前会话' : (l.hosts ?? []).map((a) => hostNameOfId(a.hostId) + (a.agent === '' ? '' : `·${a.agent}`)).join('·');
+  const par = idx === 0 ? '' : ` · 最多 ${(l.hosts ?? []).reduce((s, a) => s + (a.parallel ?? 1), 0)} 路`;
+  const base = `${l.name} · ${cast}${par}`;
+  const back = l.retry === undefined ? '' : ` ⟲回溯→${layers.find((x) => x.id === l.retry.toLayerId)?.name ?? l.retry.toLayerId} ≤${l.retry.maxRounds}轮`;
+  return [base, back];
+}
+
+/** 收起态结构链摘要：1环名 接待员 → 2环名 … （带回溯的环尾加 ⟲）。 */
+function chainSummary(tpl) {
+  return (tpl.layers ?? []).map((l, i) => {
+    const cast = i === 0 ? '当前会话' : (l.hosts ?? []).map((a) => hostNameOfId(a.hostId)).join('+');
+    return `${i + 1}${l.name} ${cast}${l.retry === undefined ? '' : '⟲'}`;
+  }).join(' → ');
+}
+
+/** 故事线编辑弹框：完整配置（环序/提示词/接待员四件套/回溯）都在这里改；
+ * 遮罩点选=取消。展开态不展示的细节全部由本弹框承载。 */
+function StoryModal({ initial, onDone }) {
+  // 字段行助手：标签 + 控件竖排一行（回溯目标/轮数两处共用，避免重复三行结构）
+  const mkField = (label, ...kids) => h('div', { className: 'dshm-field' }, h('span', null, label), ...kids);
+  // 宿主可用模型清单（datalist 数据源；失败回落空表=纯手输）
+  const [modelList, setModelList] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    requestJson('GET', ROUTE.models).then((out) => {
+      if (!alive) return;
+      setModelList(out);
+      // 路由下拉的数据源：宿主 LLM provider 清单（每环境实际可用，不写死）
+      providersRefForOptions = (out.providers ?? []).map((p) => p.id);
+    }).catch(() => { if (alive) setModelList({ models: [] }); });
+    return () => { alive = false; providersRefForOptions = []; };
+  }, []);
+  // 选项 = 宿主清单 + 已装载模板出现过的值 + 当前值（去重；空串不进表）
+  const modelOptionsFor = (current) => {
+    const byValue = new Map();
+    for (const m of modelList?.models ?? []) byValue.set(m.id, { value: m.id, label: `${m.name}（${m.provider}）` });
+    for (const v of collectActorOptions([''], 'model')) if (v !== '') byValue.set(v, { value: v, label: v });
+    if (current !== '') byValue.set(current, { value: current, label: byValue.get(current)?.label ?? current });
+    return [...byValue.values()];
+  };
+  const [draft, setDraft] = useState(() => {
+    if (initial === null) {
+      return { id: `story-${Date.now().toString(36)}`, name: '', goalHint: '', decompose: true, layers: [newLayer(1, true)] };
+    }
+    return {
+      id: initial.id,
+      name: initial.name ?? '',
+      goalHint: initial.goalHint ?? '',
+      decompose: initial.decompose !== false,
+      layers: (initial.layers ?? []).map((l) => ({
+        id: l.id, name: l.name ?? '', prompt: l.prompt ?? '',
+        actors: (l.hosts ?? []).map((a) => ({ hostId: a.hostId, agent: a.agent ?? '', model: a.model ?? '', parallel: a.parallel ?? 1 })),
+        retry: l.retry === undefined ? undefined : { toLayerId: l.retry.toLayerId, maxRounds: l.retry.maxRounds },
+      })),
+    };
+  });
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const setLayer = (i, patch) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
+  // 纯功能式更新：直接在 setDraft 的 d 上计算，防渲染闭包里的旧 draft 覆盖并发改动
+  const setActor = (li, ai, patch) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, actors: l.hosts.map((a, k) => (k === ai ? { ...a, ...patch } : a)) } : l)) }));
+  // 移动环：回溯目标必须保持“更早”——移动后若有回溯指向同位/更晚的环就拦截
+  // （按钮点击是顺序用户操作，读渲染闭包里的 draft 即可，无并发写者）
+  const moveLayer = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= draft.layers.length) return;
+    const layers = [...draft.layers];
+    const [x] = layers.splice(i, 1);
+    layers.splice(j, 0, x);
+    if (layers.some((l, k) => l.retry !== undefined && layers.findIndex((y) => y.id === l.retry.toLayerId) >= k)) {
+      setErr('这个方向会让回溯指向不更早的环，先调整回溯目标');
+      return;
+    }
+    setErr('');
+    setDraft((d) => ({ ...d, layers }));
+  };
+  const addLayer = () => setDraft((d) => {
+    // 删除/排序后 length+1 可能撞已有 id（id 是 React key 与回溯目标，重复会让服务端拒绝保存）
+    const used = new Set(d.layers.map((l) => l.id));
+    let seq = d.layers.length + 1;
+    while (used.has(`act-${seq}`)) seq += 1;
+    return { ...d, layers: [...d.layers, newLayer(seq, false)] };
+  });
+  const addActor = (li) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, actors: [...l.hosts, { hostId: appearanceState.hosts[0]?.id ?? 'dolores', agent: '', model: '', parallel: 1 }] } : l)) }));
+  const submit = async () => {
+    if (draft.name.trim() === '') { setErr('故事线名不能为空'); return; }
+    if (draft.layers.some((l) => l.name.trim() === '')) { setErr('每一环都要有环名'); return; }
+    if (draft.layers.some((l) => l.prompt.trim() === '')) { setErr('每一环都要有共用提示词'); return; }
+    // 首环之外每环至少一位接待员（首环在当前会话执行，不需要）
+    if (draft.layers.slice(1).some((l) => l.hosts.length === 0)) { setErr('首环之外的每一环都要至少一位接待员'); return; }
+    setBusy(true); setErr('');
+    try {
+      // requestJson 对非 2xx 直接 throw（错误文案进 catch），成功载荷无 error 字段
+      // 首环在当前会话执行（无接待员）：保存时归一为空数组，旧数据自然收敛
+      const layers = draft.layers.map((l, idx) => (idx === 0 ? { ...l, actors: [] } : l));
+      await requestJson('PUT', ROUTE.narrativesTemplate, { template: { ...draft, layers } });
+      onDone();
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally { setBusy(false); }
+  };
+  return h('div', { className: 'dshm-modal', onClick: onDone },
+    h('div', { className: 'dshm-modal-card', onClick: (e) => e.stopPropagation() },
+      h('div', { className: 'dshm-modal-head' },
+        h('input', { className: 'dshm-input', style: { flex: '1' }, maxLength: 24, value: draft.name, onChange: (e) => setDraft((d) => ({ ...d, name: e.target.value })), placeholder: '故事线名（如：功能开发线）' }),
+        h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: onDone }, '取消'),
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy, onClick: submit }, busy ? '保存中…' : '保存')),
+      h('div', { className: 'dshm-modal-body' },
+        h('div', { className: 'dshm-field' }, h('span', null, '目标提示'), h('input', { className: 'dshm-input', maxLength: 160, value: draft.goalHint, onChange: (e) => setDraft((d) => ({ ...d, goalHint: e.target.value })), placeholder: '该给这条故事线什么目标（/maze-story 时参考）' })),
+        h('div', { className: 'dshm-field' }, h('span', null, '第一步拆分子任务'),
+          h('label', { className: 'dshm-switch' },
+            h('input', { type: 'checkbox', checked: draft.decompose, onChange: (e) => setDraft((d) => ({ ...d, decompose: e.target.checked })) }),
+            h('i', null)),
+          h('span', { className: 'dshm-hint', style: { marginTop: '0' } }, draft.decompose ? '确认任务后先拆出子任务清单再执行' : '不拆分：整个对象作为一个任务直接执行（评审类场景）')),
+        h('div', { className: 'dshm-ringlist' },
+        draft.layers.map((l, i) => h('div', { key: l.id, className: `dshm-ringcard${l.retry !== undefined ? ' has-retry' : ''}` },
+          h('div', { className: 'dshm-ring-head' },
+            h('span', { className: 'dshm-ring-seq' }, `环 ${i + 1}`),
+            h('input', { className: 'dshm-input', style: { flex: '1', minWidth: '120px' }, maxLength: 24, value: l.name, onChange: (e) => setLayer(i, { name: e.target.value }), placeholder: '环名（如：拆解/实现/质检/收束）' }),
+            h('span', { className: 'dshm-ring-tools' },
+              h('button', { className: 'dshm-btn dshm-btn-ghost', title: '上移', onClick: () => moveLayer(i, -1) }, '↑'),
+              h('button', { className: 'dshm-btn dshm-btn-ghost', title: '下移', onClick: () => moveLayer(i, 1) }, '↓'),
+              draft.layers.length <= 1 ? null : h('button', { className: 'dshm-btn dshm-btn-ghost', title: '删除此环', onClick: () => setDraft((d) => {
+                // 删环后清掉指向它的回溯（否则 retry 悬空，服务端会拒保存）
+                const removed = d.layers[i];
+                return { ...d, layers: d.layers
+                  .filter((_, j) => j !== i)
+                  .map((x) => (x.retry !== undefined && x.retry.toLayerId === removed.id ? { ...x, retry: undefined } : x)) };
+              }) }, '✕'))),
+          h('textarea', { className: 'dshm-textarea', rows: 3, maxLength: 2000, value: l.prompt, onChange: (e) => setLayer(i, { prompt: e.target.value }), placeholder: i === 0 ? (draft.decompose ? '拆解提示词：希望怎么拆子任务（在当前会话执行）' : '准备提示词：确认对象与标准（不拆分，当前会话执行）') : '共用提示词：这一环的接待员都要遵守什么' }),
+          h('div', { className: 'dshm-hint', style: { marginTop: '2px' } }, `${l.prompt.length}/2000`),
+          ...(i === 0 ? [] : l.hosts).map((a, ai) => h('div', { key: `${l.id}-actor-${ai}`, className: 'dshm-host-row' },
+            h('div', { className: 'dshm-host-cell' }, h('span', { className: 'dshm-mini-label' }, '接待员'),
+              h('select', { className: 'dshm-select', value: a.hostId, onChange: (e) => setActor(i, ai, { hostId: e.target.value }) },
+                appearanceState.hosts.map((hh) => h('option', { key: hh.id, value: hh.id }, hh.name)),
+                // 名册里已删除的接待员：补回落项显示当前值，避免 select 空显首项被静默改写
+                appearanceState.hosts.some((hh) => hh.id === a.hostId) ? null : h('option', { key: a.hostId, value: a.hostId }, hostNameOfId(a.hostId)))),
+            h('div', { className: 'dshm-host-cell' }, h('span', { className: 'dshm-mini-label' }, '路由'),
+              h('select', { className: 'dshm-select', value: a.agent, onChange: (e) => setActor(i, ai, { agent: e.target.value }) }, collectAgentOptions().map((o) => h('option', { key: o, value: o }, o === '' ? '默认路由' : o)))),
+            h('div', { className: 'dshm-host-cell' }, h('span', { className: 'dshm-mini-label' }, '模型'),
+              // 从 datalist 选中模型时若路由还是默认，自动配对该模型所属 provider——
+              // 否则模型挂在默认路由上必然 UNKNOWN_MODEL（评审线 Maeve 空产出的事故根源）
+              h('input', { className: 'dshm-input', type: 'text', list: `dshm-models-${i}-${ai}`, placeholder: '默认（跟随环境）', value: a.model, onChange: (e) => {
+                const next = e.target.value;
+                const hit = (modelList?.models ?? []).find((m) => m.id === next && m.provider);
+                setActor(i, ai, hit && a.agent === '' ? { model: next, agent: hit.provider } : { model: next });
+              } }),
+              h('datalist', { id: `dshm-models-${i}-${ai}` }, modelOptionsFor(a.model).map((o) => h('option', { key: o.value, value: o.value }, o.label)))),
+            h('div', { className: 'dshm-host-cell' }, h('span', { className: 'dshm-mini-label' }, '最大并行数'),
+              h(NumPicker, { value: a.parallel, min: 1, max: 8, onChange: (v) => setActor(i, ai, { parallel: v }) })),
+            l.hosts.length <= 1 ? null : h('button', { className: 'dshm-btn dshm-btn-ghost dshm-host-x', title: '移除接待员', onClick: () => setLayer(i, { actors: l.hosts.filter((_, j) => j !== ai) }) }, '✕'))),
+          i === 0 ? null : (l.hosts.length >= 8 ? null : h('button', { className: 'dshm-add', onClick: () => addActor(i) }, '＋ 添加接待员')),
+          i === 0
+            ? h('div', { className: 'dshm-hint' }, draft.decompose ? '当前会话执行：任务确认与子任务拆解在本会话完成，仅提示词可配置' : '当前会话执行：确认任务即可（不拆分），仅提示词可配置')
+            : h('div', null,
+              h('div', { className: 'dshm-switch-row' },
+                h('label', { className: 'dshm-switch', title: '启用回溯（失败卡打回这一环重做）' },
+                  h('input', { type: 'checkbox', checked: l.retry !== undefined, onChange: (e) => setLayer(i, e.target.checked
+                    ? { retry: { toLayerId: draft.layers[i - 1].id, maxRounds: 2 } }
+                    : { retry: undefined }) }),
+                  h('i', null)),
+                h('span', { className: 'dshm-hint' }, '启用回溯（失败卡打回这一环重做）')),
+              l.retry === undefined ? null : h('div', { className: 'dshm-pair' },
+                mkField('回溯目标',
+                  h('select', { className: 'dshm-select', value: l.retry.toLayerId, onChange: (e) => setLayer(i, { retry: { toLayerId: e.target.value, maxRounds: l.retry.maxRounds } }) },
+                    draft.layers.slice(0, i).map((earlier) => h('option', { key: earlier.id, value: earlier.id }, earlier.name))
+                  )
+                ),
+                mkField('回溯轮数（打回重做的最多次数）',
+                  h(NumPicker, { value: l.retry.maxRounds, min: 1, max: 3, onChange: (v) => setLayer(i, { retry: { toLayerId: l.retry.toLayerId, maxRounds: v } }) })
+                )
+              )
+            )
+          )),
+        ),
+        draft.layers.length >= 12 ? null : h('button', { className: 'dshm-add', onClick: addLayer }, '＋ 添加一环'),
+        err === '' ? null : h('span', { className: 'dshm-err' }, err)
+      )
+    )
+  );
+}
+
+// 来源徽标文案（服务端 origin 字段 → 中文）
+const ORIGIN_LABELS = { builtin: '内置', overridden: '已定制', custom: '自定义' };
+
+/** 故事线一行卡：主体点击=选中；▾ 展开/收起结构骨架；✎ 编辑弹框；🗑 两步删除。 */
+function StoryCard({ tpl, selected, expanded, armed, onPick, onToggle, onEdit, onArmDelete, onConfirmDelete }) {
+  const origin = ORIGIN_LABELS[tpl.origin] ?? '自定义';
+  return h('div', { className: selected ? 'dshm-story-row is-sel' : 'dshm-story-row' },
+    h('div', { className: 'dshm-story-head' },
+      h('div', { className: 'dshm-story-main', role: 'button', tabIndex: 0, onClick: onPick, onKeyDown: (e) => { if (e.key === 'Enter') onPick(); } },
+        h('span', { className: 'dshm-story-name' }, tpl.name),
+        h('span', { className: 'dshm-story-badge' }, origin),
+        selected ? h('span', { className: 'dshm-story-sel-mark' }, '✦') : null),
+      h('span', { className: 'dshm-story-ops' },
+        h('button', { className: 'dshm-btn dshm-btn-ghost', title: expanded ? '收起' : '展开结构', onClick: onToggle }, expanded ? '▴' : '▾'),
+        h('button', { className: 'dshm-btn dshm-btn-ghost', title: '编辑', onClick: onEdit }, '✎'),
+        h('button', { className: 'dshm-btn dshm-btn-ghost', title: '删除', onClick: armed ? onConfirmDelete : onArmDelete }, armed ? '确认?' : '🗑'))),
+    h('div', { className: 'dshm-story-sum', onClick: onPick }, chainSummary(tpl)),
+    expanded ? h('div', { className: 'dshm-story-x' },
+      h('div', { className: 'dshm-story-rings' },
+        (tpl.layers ?? []).map((l) => h('div', { key: l.id, className: l.retry === undefined ? 'dshm-ring-row' : 'dshm-ring-row has-retry' },
+          (() => { const [base, back] = ringLine(l, tpl.layers ?? []); return [h('span', { key: 'label', className: 'dshm-ring-label' }, base), back === '' ? null : h('span', { key: 'retry', className: 'dshm-ring-retry' }, back)]; })()))),
+      tpl.goalHint === '' ? null : h('div', { className: 'dshm-story-goal' }, `目标提示：${tpl.goalHint}`)) : null);
+}
+
+/** 轨迹一行：日期 · 故事线 · 判词 + 轮回（复制重演故事线）。 */
+function TrajectoryRow({ run, onEncore, armed, setArmed }) {
+  const d = new Date(run.startedAt);
+  const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const live = run.endedAt === undefined || run.endedAt === null;
+  return h('div', { className: 'dshm-playbill' },
+    h('span', { className: 'dshm-playbill-date' }, md),
+    h('span', { className: 'dshm-playbill-name' }, `《${run.templateName}》`),
+    live
+      ? h('span', { className: 'dshm-playbill-verdict is-live' }, '… 进行中')
+      : h('span', { className: `dshm-playbill-verdict ${run.verdict === 'failed' ? 'is-failed' : ''}` }, run.verdict === 'failed' ? '⚠ 出岔' : '✦ 抵达'),
+    live ? null : h('button', {
+      className: 'dshm-btn dshm-btn-ghost',
+      onClick: () => (armed ? onEncore() : setArmed(run.id)),
+    }, armed ? '确认?' : '轮回'));
+}
+
+/** 故事线模块页（设置第四个 Tab） */
+function NarrativesModule() {
+  const [data, setData] = useState(null);
+  const [editing, setEditing] = useState(null); // null|{mode:'new'}|{mode:'edit',tpl}
+  const [armed, setArmed] = useState('');       // 两步删除/轮回的 armed id
+  const [expanded, setExpanded] = useState(''); // 展开态的故事线 id（''=全收起）
+  const [msg, setMsg] = useState('');
+  const refresh = () => requestJson('GET', ROUTE.narrativesState)
+    .then((out) => {
+      if (out.error === undefined) { versionRef.current = out.narrativeVersion ?? ''; setData(out); }
+      else setMsg(String(out.error));
+    })
+    // 拉取失败要有提示：静默会让"读取失败"渲染成误导性的「尚无故事线/还没有轨迹」空态
+    .catch((e) => setMsg(String(e?.message ?? e)));
+  useEffect(() => { refresh(); }, []);
+  // 订阅 SSE 快照（广播帧剥提示词，靠 narrativeVersion 判断）：版本一致只跟进 runs/选中态；
+  // 版本变了（他窗编辑/删除/选中）重新 GET 全文——编辑器需要带提示词的完整模板
+  const versionRef = useRef('');
+  useEffect(() => {
+    const onState = (s) => {
+      const sl = s?.storylines;
+      if (!sl) return;
+      if (sl.narrativeVersion !== undefined && sl.narrativeVersion !== versionRef.current) { refresh(); return; }
+      setData((prev) => ({ ...prev, templates: prev?.templates ?? [], runs: sl.runs ?? [], selectedTemplateId: sl.selectedTemplateId, narrativeVersion: sl.narrativeVersion }));
+    };
+    stateListeners.add(onState);
+    return () => stateListeners.delete(onState);
+  }, []);
+  const tplList = data?.templates ?? [];
+  const runs = data?.runs ?? [];
+  // 选项集同步进 effect（渲染体只读）：模块级选项源随装载模板走，编辑器 select 消费；
+  // 卸载清空防残留——两次挂载间隔里 collectActorOptions 会读到过期模板集
+  useEffect(() => {
+    tplsRefForOptions = tplList;
+    return () => { tplsRefForOptions = []; };
+  }, [tplList]);
+  const removeTpl = async (tpl) => {
+    setArmed('');
+    try {
+      await requestJson('DELETE', ROUTE.narrativesTemplate, { templateId: tpl.id });
+      setMsg('已删除');
+    } catch (e) {
+      setMsg(String(e?.message ?? e));
+      return; // 删除失败：保留真实错误，不做多余 GET（其失败会覆盖原因）
+    }
+    refresh();
+  };
+  const rerun = async (run) => {
+    setArmed('');
+    try {
+      const out = await requestJson('POST', ROUTE.narrativesCompose, {
+        templateId: run.templateId,
+        goal: '轮回：接上次故事线继续（带上次结论与遗留问题）',
+      });
+      if (typeof out.message !== 'string') { setMsg('合成失败'); return; }
+      try {
+        await navigator.clipboard.writeText(out.message);
+        setMsg('轮回故事线已复制——切到会话输入框粘贴，回车启程');
+      } catch {
+        // 浏览器丢失用户激活或非安全上下文：给出全文手动复制，不把成功的合成报成失败
+        setMsg(`复制失败，请手动复制：${out.message}`);
+      }
+    } catch (e) {
+      setMsg(String(e?.message ?? e));
+    }
+  };
+  const pick = async (tpl) => {
+    try {
+      await requestJson('POST', ROUTE.narrativesSelect, { templateId: tpl.id });
+      refresh();
+    } catch (e) { setMsg(String(e?.message ?? e)); } // 失败：服务端状态未变，不刷新不覆盖错误
+  };
+  return h('div', { className: 'dshm-page' },
+    h('div', { className: 'dshm-page-intro' },
+      h('div', { className: 'dshm-narr-head' }, '故事线'),
+      h('div', { className: 'dshm-hint' }, '点卡片选中，/maze-story 启程（输入的文本就是目标）；▾ 展开看整条线。')),
+    msg === '' ? null : h('div', { className: 'dshm-hint' }, msg),
+    editing === null ? null : h(StoryModal, {
+      // key 随编辑目标变：useState 初始化器只在挂载跑，无 key 时换目标会沿用上一份草稿
+      key: editing.mode === 'edit' ? editing.tpl.id : 'new',
+      initial: editing.mode === 'edit' ? editing.tpl : null,
+      onDone: () => { setEditing(null); refresh(); },
+    }),
+    h('div', { className: 'dshm-sec' },
+      h('div', { className: 'dshm-sec-title' }, '故事线库', tplList.length < 12 && editing === null
+        ? h('button', { className: 'dshm-btn dshm-btn-ghost', onClick: () => { setMsg(''); setEditing({ mode: 'new' }); } }, '＋ 新故事线') : null),
+      tplList.length === 0
+        ? (data === null
+          ? h('div', { className: 'dshm-hint' }, '读取中…')
+          : h('div', { className: 'dshm-hint' }, '"These violent delights have violent ends." —— 尚无故事线。'))
+        : tplList.map((tpl) => h(StoryCard, {
+            key: tpl.id, tpl,
+            selected: data?.selectedTemplateId === tpl.id,
+            expanded: expanded === tpl.id,
+            armed: armed === tpl.id,
+            onPick: () => pick(tpl),
+            onToggle: () => setExpanded((v) => (v === tpl.id ? '' : tpl.id)),
+            onEdit: () => { setMsg(''); setEditing({ mode: 'edit', tpl }); },
+            onArmDelete: () => setArmed(tpl.id),
+            onConfirmDelete: () => removeTpl(tpl),
+          }))),
+    h('div', { className: 'dshm-sec' },
+      h('div', { className: 'dshm-sec-title' }, '轨迹 Trajectory'),
+      runs.length === 0
+        ? h('div', { className: 'dshm-hint' }, data === null ? '读取中…' : '还没有轨迹。在会话输入框工具行「故事线」选故事线，/maze-story 启程。')
+        : runs.map((run) => h(TrajectoryRow, { key: run.id, run, onEncore: () => rerun(run), armed: armed === run.id, setArmed: () => setArmed(run.id) }))),
+  );
+}
+
+/** 输入框工具行的故事线 chip：只选故事线（持久化选中态），启程走 /maze-story。 */
+function StoryQuickButton() {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [loadState, setLoadState] = useState('loading');
+  // 挂载即拉一次选中态（chip 标签要显示它）；失败回 null，打开浮层且仍无数据时重试
+  // （宿主/路由晚于 chip 就绪时，选择器才不会整个会话卡死在「读取失败」）
+  const loadSeqRef = useRef(0); // 挂载拉取与「打开且无数据」重拉可能并发：只认最新一次的结果
+  const load = () => {
+    const seq = ++loadSeqRef.current;
+    setLoadState('loading');
+    return requestJson('GET', ROUTE.narrativesState)
+      .then((out) => {
+        if (seq !== loadSeqRef.current) return;
+        setState(out.error === undefined ? out : null); setLoadState(out.error === undefined ? 'ok' : 'failed');
+      })
+      .catch(() => {
+        if (seq !== loadSeqRef.current) return;
+        setState(null); setLoadState('failed');
+      });
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => { if (open && state === null) load(); }, [open]);
+  // 选中态/模板列表会随设置页选择或跨窗口变化：订阅宿主 SSE 快照保持 chip 同步
+  useEffect(() => {
+    const onState = (s) => {
+      if (s && s.storylines) { setState(s.storylines); setLoadState('ok'); }
+    };
+    stateListeners.add(onState);
+    return () => stateListeners.delete(onState);
+  }, []);
+  const tpls = state?.templates ?? [];
+  const selected = typeof state?.selectedTemplateId === 'string'
+    ? tpls.find((t) => t.id === state.selectedTemplateId)
+    : undefined;
+  const pick = async (tpl) => {
+    setBusy(true); setErr('');
+    try {
+      // 选择器语义：只改选中态（持久化宿主），不碰输入框；
+      // 启程唯一入口=/maze-story（不带模板名=用选中故事线+用户输入文本）
+      await requestJson('POST', ROUTE.narrativesSelect, { templateId: tpl.id });
+      // tpls 是点击时闭包：await 期间 SSE 可能已推送更新的列表，优先保留最新
+      setState((prev) => ({ ...(prev ?? {}), templates: prev?.templates ?? tpls, selectedTemplateId: tpl.id }));
+      setOpen(false);
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally { setBusy(false); }
+  };
+  // 弹层主体三分支：加载中/空库/列表（从 return 里抽出，避免嵌套三元）
+  const popBody = () => {
+    if (loadState === 'failed') return h('span', { className: 'dshm-hint' }, '读取失败，重开重试');
+    if (loadState === 'loading' || state === null) return h('span', { className: 'dshm-hint' }, '读取中…');
+    if (tpls.length === 0) return h('span', { className: 'dshm-hint' }, '暂无故事线（去设置 · 故事线新建）');
+    return tpls.map((tpl) => h('button', {
+      key: tpl.id,
+      className: tpl.id === state.selectedTemplateId ? 'dshm-story-pop-item is-on' : 'dshm-story-pop-item',
+      disabled: busy,
+      onClick: () => pick(tpl),
+    }, `${tpl.name}${tpl.id === state.selectedTemplateId ? ' ✓' : ''}`));
+  };
+  return h('span', { className: 'dshm-story-quick' },
+    h('button', {
+      className: 'dshm-story-quick-btn',
+      title: '故事线：选择当前故事线，用 /maze-story 启程',
+      onClick: () => setOpen((v) => !v),
+    },
+      // 叙事线图标：起-转-合三点两段的故事弧（线性 stroke，同工具行图标体例）
+      h('svg', { viewBox: '0 0 16 16', width: 13, height: 13, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' },
+        h('path', { d: 'M3.2 12.4 8 3.6l4.8 8.8' }),
+        h('circle', { cx: 3.2, cy: 12.4, r: 1.3, fill: 'currentColor', stroke: 'none' }),
+        h('circle', { cx: 8, cy: 3.6, r: 1.3, fill: 'currentColor', stroke: 'none' }),
+        h('circle', { cx: 12.8, cy: 12.4, r: 1.3, fill: 'currentColor', stroke: 'none' })),
+      h('span', null, selected === undefined ? '故事线' : selected.name),
+      h('svg', { viewBox: '0 0 16 16', width: 10, height: 10, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', 'aria-hidden': 'true' },
+        h('path', { d: 'M4 6l4 4 4-4' }))),
+    open === false ? null : h('span', { className: 'dshm-story-pop' },
+      h('span', { className: 'dshm-story-pop-title' }, '选择一条故事线（/maze-story 启程）'),
+      popBody(),
+      err === '' ? null : h('span', { className: 'dshm-err' }, err)),
+  );
+}
+
 const MODULES = [
   { id: 'appearance', label: '个性化', component: AppearanceModule },
   { id: 'dolores', label: '接待员', component: DoloresModule },
   { id: 'reminders', label: '提醒', component: RemindersModule },
+  { id: 'narratives', label: '故事线', component: NarrativesModule },
   { id: 'notes', label: '小记', component: NotesModule },
 ];
 
@@ -2744,6 +3332,11 @@ exports.apply = function (ctx) {
   // slots.inject：等槽位声明者（ui-layout / ui-settings）就绪再注册，
   // 声明者卸载时贡献随之撤销——生命周期由插件 fiber 兜底，无需手工清理。
   ctx.inject(['slots'], (scope) => {
+    // 会话作用域槽：chip 只做故事线选择（选中态持久化宿主），不再写输入框草稿。
+    scope.slots.inject('conversation.input.left', () => scope.slots.register(
+      { name: 'conversation.input.left', id: 'maze-story', order: 20 },
+      StoryQuickButton,
+    ));
     scope.slots.inject('shell.overlay', () => scope.slots.register(
       { name: 'shell.overlay', id: 'maze-float', order: 10 },
       DoloresOverlay,

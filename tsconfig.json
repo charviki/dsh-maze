@@ -21,6 +21,8 @@
       "@deepseek-ai/cordis/*": ["../vendor/cordis/lib/types/*"],
       "@deepseek-ai/dsh-llm": ["../packages/llm/llm/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-host-webserver": ["../packages/host/webserver/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-commands": ["../packages/interaction/commands/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent": ["../packages/core/agent/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-session": ["../packages/core/session/lib/types/index.d.ts"],
       "@deepseek-ai/schemastery": ["../vendor/schemastery/lib/types/index.d.ts"]
     }

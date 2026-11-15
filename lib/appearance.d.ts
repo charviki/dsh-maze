@@ -36,7 +36,7 @@ export type LineGroup = 'daily' | 'done' | 'failed';
 export type LinesConfig = {
     [K in LineGroup]: string[];
 };
-/** 一位接待员：迷宫中心的一位觉醒者（形象+专属剧本） */
+/** 一位接待员：迷宫中心的一位觉醒者（形象+专属台词） */
 export interface HostEntry {
     /** 稳定标识（启用/手动指定引用；保持不变便于外部引用） */
     id: string;

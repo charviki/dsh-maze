@@ -4,20 +4,30 @@
  * - 会话事件流 → Dolores 神态镜像（narrative.ts，供客户端微动效与台词）
  * - 规则装载校验（fail-loud）与 config/store 合并持久化（tombstone 语义见 reminders/store.ts）
  * - HTTP 路由：GET/POST /maze/reminders/{state,ack,rule,preview}、GET/PUT /maze/appearance、
- *   GET/PUT /maze/notes/
+ *   GET/PUT /maze/notes/、GET/PUT/DELETE /maze/narratives/{state,template}、POST /maze/narratives/compose
  *   GET /maze/events（SSE 状态推送）
+ * - /maze-story 斜杠命令：合成故事线消息直达当前会话（agent.followup）
  * - 同源信任栅栏 + 请求体上限（回环 socket 平台免鉴权，需自挡恶意网页的
  *   cross-site fetch）
  *
- * 纯 UI 提醒：不向模型上下文注入任何内容。
+ * 纯 UI 提醒：不向模型上下文注入任何内容（故事线命令例外：那是用户显式
+ * 触发的用户消息，透明进 transcript）。
  * 模块化预留：提醒中心（reminders）是 Maze 的第一个功能模块，路由统一挂
  * /maze/reminders/* 前缀；未来新模块各占 /maze/<module>/* 与设置页一个 tab。
  */
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        'maze-story': {
+            kind: 'maze-story';
+        } & ContextFormed;
+    }
+}
+import type { ContextFormed } from '@deepseek-ai/dsh-llm';
 import z from '@deepseek-ai/schemastery';
 export declare const name = "dsh-maze";
-export declare const inject: string[];
 export interface Config {
     rules: unknown[];
+    narratives: unknown[];
 }
 export declare const Config: z<Config>;
 /**

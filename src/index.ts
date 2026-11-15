@@ -4,19 +4,31 @@
  * - 会话事件流 → Dolores 神态镜像（narrative.ts，供客户端微动效与台词）
  * - 规则装载校验（fail-loud）与 config/store 合并持久化（tombstone 语义见 reminders/store.ts）
  * - HTTP 路由：GET/POST /maze/reminders/{state,ack,rule,preview}、GET/PUT /maze/appearance、
- *   GET/PUT /maze/notes/
+ *   GET/PUT /maze/notes/、GET/PUT/DELETE /maze/narratives/{state,template}、POST /maze/narratives/compose
  *   GET /maze/events（SSE 状态推送）
+ * - /maze-story 斜杠命令：合成故事线消息直达当前会话（agent.followup）
  * - 同源信任栅栏 + 请求体上限（回环 socket 平台免鉴权，需自挡恶意网页的
  *   cross-site fetch）
  *
- * 纯 UI 提醒：不向模型上下文注入任何内容。
+ * 纯 UI 提醒：不向模型上下文注入任何内容（故事线命令例外：那是用户显式
+ * 触发的用户消息，透明进 transcript）。
  * 模块化预留：提醒中心（reminders）是 Maze 的第一个功能模块，路由统一挂
  * /maze/reminders/* 前缀；未来新模块各占 /maze/<module>/* 与设置页一个 tab。
  */
 
 import type {} from '@deepseek-ai/dsh-llm';
+// 声明合并扩展宿主消息源联合：故事线启程消息的 source kind（merge-extensible sum type
+// 的官方扩展方式，见 dsh-llm message.d.ts；替代早前的 as never 类型逃逸）
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'maze-story': { kind: 'maze-story' } & ContextFormed;
+  }
+}
+import type { ContextFormed } from '@deepseek-ai/dsh-llm';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type {} from '@deepseek-ai/dsh-session';
+import type { CommandResult } from '@deepseek-ai/dsh-commands';
+import type { Agent } from '@deepseek-ai/dsh-agent';
 import z from '@deepseek-ai/schemastery';
 import { join } from 'node:path';
 import {
@@ -43,9 +55,12 @@ import { DEFAULT_APPEARANCE, loadAppearanceSync, resolveDefaultAppearance, saveA
 import { currentDemeanor, narrativeEventToDemeanor, pickDemeanorRecord, type Demeanor, type DemeanorRecord } from './narrative.js';
 import { loadNotesConfigSync, saveNotesConfigSync, type NotesConfig, emptyNotesConfig, validateNotesConfig } from './notes/config.js';
 import { VikunjaNoteStore } from './notes/vikunja.js';
+import { BUILTIN_TEMPLATE_IDS, BUILTIN_TEMPLATES, NARRATIVES_MAX, assembleNarrativeTemplates, mergeNarratives, storylinesVersion, validateNarrativeTemplate, type NarrativeTemplate } from './narratives.js';
+import { loadNarrativesSync, narrativesPathOf, saveNarrativesSync } from './narrative-store.js';
+import { composeNarrativeMessage } from './narrative-script.js';
+import { closeStaleRuns, loadRunsSync, projectSessionEvent, runsPathOf, saveRunsSync, type RunRecord, type SessionEventLike } from './runs.js';
 
 export const name = 'dsh-maze';
-export const inject = ['webServer'];
 
 /** 调度器节拍：30s。分钟级 cron 的去重由引擎的 lastCronMinute 保证 */
 const TICK_MS = 30_000;
@@ -54,6 +69,7 @@ const HISTORY_LIMIT = 50;
 
 export interface Config {
   rules: unknown[];
+  narratives: unknown[];
 }
 
 export const Config: z<Config> = z.object({
@@ -61,6 +77,8 @@ export const Config: z<Config> = z.object({
     // 默认规则与文档示例一致：GLM 高峰时段额度提醒
     { id: 'glm-peak-hours', name: 'GLM 高峰时段提醒', message: '当前 {model}（{provider}）额度消耗较快，建议切换其他模型', startHour: 14, endHour: 18, modelPattern: '*glm*', maxPerDay: 2, cooldownMinutes: 120 },
   ]),
+  // 附加故事线模板（内置三条为基底；同 id 覆盖）
+  narratives: z.array(z.any()).default([]),
 });
 
 /**
@@ -90,7 +108,9 @@ function sendJson(res: RouteRes, status: number, payload: unknown): void {
 
 /** 常规路由请求体上限；外观 PUT 含 base64 大图单独放宽 */
 const BODY_MAX_DEFAULT = 64 * 1024;
-const BODY_MAX_APPEARANCE = 8 * 1024 * 1024; // schema 侧另有图片聚合上限 7.5M 字符（见 appearance.ts），合法配置总能装进该 cap
+const BODY_MAX_APPEARANCE = 8 * 1024 * 1024;
+// 故事线模板 body 上限：覆盖 12 环 × 2000 字中文提示词的最坏体积
+const BODY_MAX_NARRATIVES = 256 * 1024;
 
 /**
  * 读 JSON 请求体；坏 JSON / 请求中断（error 事件）/ 超过 maxBytes 都返回 undefined（路由回 400）。
@@ -216,6 +236,114 @@ export function apply(ctx: any, config: Config): void {
     ctx.logger?.warn?.(`dsh-maze notes 配置读取失败，按未配置处理: ${String(err)}`);
   }
 
+  // ---- 故事线：模板（内置基底 + config 附加 + store 覆盖/墓碑）与故事线场次 --------
+  // 故事线是软功能：config 单条非法只跳过该条（warn），不拖垮提醒/外观/小记
+  let configNarratives: NarrativeTemplate[] = [];
+  for (const raw of cfg.narratives) {
+    try {
+      configNarratives.push(validateNarrativeTemplate(raw));
+    } catch (err) {
+      ctx.logger?.warn?.(`dsh-maze narratives 配置条目非法，已跳过: ${String(err)}`);
+    }
+  }
+  let narrativeStoreTemplates: NarrativeTemplate[] = [];
+  let narrativeDeletedIds: string[] = [];
+  // 输入框工具行 chip 的选中故事线（'' = 未选择）；斜杠命令不带模板名时用它
+  let narrativeSelectedId = '';
+  const narrativesPath = narrativesPathOf(dataDir);
+  try {
+    const store = loadNarrativesSync(narrativesPath);
+    narrativeStoreTemplates = store.templates;
+    narrativeDeletedIds = store.deletedIds;
+    narrativeSelectedId = store.selectedTemplateId;
+  } catch (err) {
+    // 与 store 同策略：损坏只损失运行时编辑，内置模板仍可用
+    ctx.logger?.warn?.(`dsh-maze narratives store 读取失败，忽略运行时编辑: ${String(err)}`);
+  }
+  // 冲突软去重与容量收敛（纯函数 assembleNarrativeTemplates，测试在 narratives.test.ts）：
+  // 名字撞名字、名字撞 id 跨三源只丢冲突条目（warn），不让一条重名配置把用户声明的全部模板
+  // 拖进兜底清空；mergeNarratives 的硬约束兜底只剩真正意外的情况。
+  {
+    const assembled = assembleNarrativeTemplates(BUILTIN_TEMPLATES, configNarratives, narrativeStoreTemplates, {
+      max: NARRATIVES_MAX,
+      warn: m => ctx.logger?.warn?.(m),
+    });
+    configNarratives = [...assembled.config];
+    narrativeStoreTemplates = [...assembled.store];
+  }
+  let narrativeTemplates: NarrativeTemplate[]
+  try {
+    narrativeTemplates = mergeNarratives(configNarratives, narrativeStoreTemplates, new Set(narrativeDeletedIds))
+  } catch (err) {
+    // 故事线是软功能：合并超限/重名等配置错误只丢故事线，不拖垮提醒/外观/小记。
+    // 降级必须整组重置 store 派生态——否则视图丢了 store 副本而 origin/选中态/后续 PUT 仍引用它们，三态分叉
+    ctx.logger?.warn?.(`dsh-maze narratives 合并失败，回退内置+配置基底: ${String(err)}`)
+    narrativeStoreTemplates = [];
+    narrativeDeletedIds = [];
+    narrativeSelectedId = '';
+    // 同步落盘空 store：磁盘若仍留旧内容，后续任何一次 commit 都会用已清空的内存覆盖它，
+    // 把只是被本次降级隐藏的运行时编辑永久丢弃（内存/磁盘分叉）
+    try { saveNarrativesSync(narrativesPath, [], [], ''); } catch { /* 落盘失败不阻断降级 */ }
+    try {
+      narrativeTemplates = mergeNarratives(configNarratives, [], new Set())
+    } catch (err2) {
+      // 配置自身也合并不了（如重名）：最后退到纯内置，故事线线绝不拖垮其他模块
+      ctx.logger?.warn?.(`dsh-maze narratives 基底合并失败，回退内置模板: ${String(err2)}`)
+      configNarratives = []; // 不清空的话后续每次 PUT/DELETE 都会重炸同一样的合并错误
+      narrativeTemplates = mergeNarratives([], [], new Set())
+    }
+  }
+  // 盘上选中可能指向墓碑/被丢弃的模板：合并视图定型后重置失效引用（chip 回「未选择」）。
+  // 只改内存不回写盘：磁盘惰性收敛——下次选中态变更落盘时自然带上，避免装载期多余一次写盘
+  if (narrativeSelectedId !== '' && !narrativeTemplates.some(t => t.id === narrativeSelectedId)) {
+    narrativeSelectedId = '';
+  }
+  // 版本指纹缓存：storylinesVersion 对全量模板（含提示词）做 stringify+fnv1a，最坏数百 KB；
+  // 只在模板集/选中变更点重算（装载链与 commitNarratives），广播帧与 statePayload 只读缓存，
+  // 否则活跃会话 500ms 节流下每次广播都白付一次全量序列化。
+  const narrativeVersionRef = { value: storylinesVersion(narrativeTemplates, narrativeSelectedId) };
+  /** 模板集变更统一出口：先算合并视图（可能因超限/重名 throw），成功才落盘与改内存 */
+  function commitNarratives(nextTemplates: readonly NarrativeTemplate[], nextDeleted: readonly string[]): void {
+    const merged = mergeNarratives(configNarratives, nextTemplates, new Set(nextDeleted));
+    saveNarrativesSync(narrativesPath, nextTemplates, nextDeleted, narrativeSelectedId);
+    narrativeStoreTemplates = [...nextTemplates];
+    narrativeDeletedIds = [...nextDeleted];
+    narrativeTemplates = merged;
+    narrativeVersionRef.value = storylinesVersion(narrativeTemplates, narrativeSelectedId);
+  }
+  /** 模板视图：附环名链与来源徽标（builtin=未定制 / overridden=内置被覆盖 / custom=自建）；
+   *  withPrompt=false 时剥掉每环提示词（SSE 广播帧瘦身用；全文走按需 GET）。 */
+  const templateView = (t: NarrativeTemplate, withPrompt = true) => ({
+    ...t,
+    layers: withPrompt ? t.layers : t.layers.map(l => ({ ...l, prompt: '' })),
+    stages: t.layers.map(l => l.name),
+    // 来源徽标：store 或 config 任一层覆盖了内置 id 都算"已定制"
+    origin: (narrativeStoreTemplates.some(s => s.id === t.id) || configNarratives.some(c => c.id === t.id))
+      ? (BUILTIN_TEMPLATE_IDS.includes(t.id) ? 'overridden' : 'custom')
+      : 'builtin',
+  });
+
+  /** 接待员名册查找（compose 时把 hostId 渲染成显示名） */
+  const hostNameOf = (hostId: string): string | undefined => appearance.hosts.find(h => h.id === hostId)?.name;
+
+  // 故事线场次：workflow 工具调用的投影留档（最近 RUNS_MAX 场，跨重启持久）
+  const runsPath = runsPathOf(dataDir);
+  let runs: readonly RunRecord[] = [];
+  try {
+    runs = loadRunsSync(runsPath);
+  } catch (err) {
+    // 场次历史只是记录：损坏即从空重来，不拦插件装载
+    ctx.logger?.warn?.(`runs 文件读取失败，从空历史开始: ${String(err)}`);
+  }
+  {
+    // 应用重启后，进行中的旧场次永远等不到结果：关闭为 interrupted（呈现为出岔）
+    const closed = closeStaleRuns(runs, Date.now());
+    if (closed !== runs) {
+      runs = closed;
+      try { saveRunsSync(runsPath, runs); } catch { /* 历史记录，落盘失败不拦装载 */ }
+    }
+  }
+
   const states = new Map<string, RuleState>();
   const pending: Reminder[] = [];
   const history: HistoryEntry[] = [];
@@ -268,8 +396,10 @@ export function apply(ctx: any, config: Config): void {
   }
 
   /** state 路由负载：规则快照（含运行时状态）+ 当前模型 + pending + 历史 + 神态。
-   *  session 指定 时 narrative 取该会话的桶；narratives 附全量分桶供 SSE 客户端各自挑选 */
-  function statePayload(session?: string): unknown {
+   *  session 指定 时 narrative 取该会话的桶；narratives 附全量分桶供 SSE 客户端各自挑选。
+   *  withPrompts=false 供 SSE 广播：剥离环提示词（最坏 12×12×2000 字≈288KB → KB 级），
+   *  narrativeVersion 让客户端发现模板语义变化后按需 GET 全文。 */
+  function statePayload(session?: string, withPrompts = true): unknown {
     const now = Date.now();
     const today = localDateKey(now);
     const record = pickDemeanorRecord(demeanorBySession, session);
@@ -291,6 +421,13 @@ export function apply(ctx: any, config: Config): void {
       }),
       pending: pending.map(p => ({ id: p.id, ruleId: p.ruleId, message: p.message, firedAt: p.firedAt })),
       history: history.slice(0, HISTORY_LIMIT),
+      // stages 随模板下发：环名表单一事实源在宿主，客户端不再复制一份
+      storylines: {
+        templates: narrativeTemplates.map(t => templateView(t, withPrompts)),
+        runs,
+        selectedTemplateId: narrativeSelectedId,
+        narrativeVersion: narrativeVersionRef.value,
+      },
     };
   }
 
@@ -303,14 +440,18 @@ export function apply(ctx: any, config: Config): void {
   let sseLastSent = '';
   let sseFlushTimer: ReturnType<typeof setTimeout> | undefined;
   let sseLastFlushAt = 0;
+  /** 广播帧：剥提示词、剥 now（now 每帧必变会打死去重；客户端只用本地时钟）。 */
+  function slimFrame(): string {
+    const snapshot = statePayload(undefined, false) as { now?: number };
+    delete snapshot.now;
+    return JSON.stringify(snapshot);
+  }
   function broadcastNow(): void {
-    const snapshot = statePayload() as { now?: number };
-    const payload = JSON.stringify(snapshot);
-    // now 每帧必变，直接逐字节比较永不命中（去重失效）：指纹剔除 now 后再比
-    const fingerprint = JSON.stringify({ ...snapshot, now: 0 });
-    if (fingerprint === sseLastSent) return;
-    sseLastSent = fingerprint;
-    for (const client of sseClients) client.write(payload);
+    // 单次序列化：帧字符串即指纹，未变零成本跳过
+    const frame = slimFrame();
+    if (frame === sseLastSent) return;
+    sseLastSent = frame;
+    for (const client of sseClients) client.write(frame);
   }
   function scheduleBroadcast(): void {
     if (sseFlushTimer !== undefined) return;
@@ -335,10 +476,26 @@ export function apply(ctx: any, config: Config): void {
   });
 
   // ---- 观察者：会话事件流 → Dolores 神态镜像（idle/waiting/thinking/tool/review/done/failed）
-  ctx.on('session/event', (session: unknown, event: { type: string; time?: unknown; data?: unknown }) => {
+  ctx.on('session/event', (session: unknown, event: SessionEventLike) => {
     // 会话身份防御式读取（跨构建 Session 类型可能滞后）
     const sid = typeof (session as { id?: unknown } | null)?.id === 'string' ? (session as { id: string }).id : undefined;
     if (sid !== undefined) lastActiveSessionId = sid;
+    // 故事线运行投影（workflow 工具调用/结果）：先于神态早退，任何事件形状都要过一遍
+    // 会话身份缺失（理论上不会）时跳过投影：空串 sessionId 会把该事件混进全局轨迹
+    let projected = runs;
+    if (sid !== undefined && sid !== '') {
+      projected = projectSessionEvent(runs, sid, event, Date.now(), (name) => narrativeTemplates.find(t => t.name === name)?.id ?? '');
+    }
+    if (projected !== runs) {
+      runs = projected;
+      try {
+        saveRunsSync(runsPath, runs);
+      } catch (err) {
+        // 落盘失败只损失跨重启历史：内存场次照常推进
+        ctx.logger?.warn?.(`dsh-maze runs 保存失败: ${String(err)}`);
+      }
+      scheduleBroadcast();
+    }
     // turn/end 的 reason.kind 决定收场神态；字段做防御式读取（跨构建类型表可能滞后于运行时）
     let reasonKind: string | undefined;
     if (event.type === 'turn/end') {
@@ -372,7 +529,64 @@ export function apply(ctx: any, config: Config): void {
     return () => clearInterval(timer);
   });
 
-  // ---- HTTP 路由（软依赖：无 web 组合时静默不装）-----------------------------------
+  // ---- /maze-story 斜杠命令：合成故事线消息直达当前会话（用户显式触发）--------------
+  /** 命令体：解析模板选择 + 目标 → 合成故事线 → followup 开启下一轮（异步：createUserMessage 运行时才从宿主解析） */
+  async function handleStoryCommand(invocation: { agent: Agent; rawInput: string }): Promise<CommandResult> {
+    const input = invocation.rawInput.trim();
+    // 解析顺序：①整段恰好是模板 id/名（显式选故事线、目标空）②「模板 id/名 + 空格 +
+    // 目标」的最长前缀匹配（模板名可含空格）③都不是 → 整段就是目标，用工具行 chip
+    // 选中的故事线（未选中时报用法）。显式模板始终覆盖 chip 选中。
+    let tpl = narrativeTemplates.find(t => t.id === input || t.name === input);
+    let goal = '';
+    if (tpl === undefined) {
+      // 名字可含空格（"foo"与"foo bar"可并存）：收集全部前缀匹配，取最长者，
+      // 否则短名会截胡用户明确输入的长名
+      let longestKey = '';
+      for (const t of narrativeTemplates) {
+        for (const key of [t.id, t.name]) {
+          if (input.startsWith(`${key} `) && key.length > longestKey.length) {
+            longestKey = key
+            tpl = t
+            goal = input.slice(key.length + 1).trim()
+          }
+        }
+      }
+    }
+    if (tpl === undefined) {
+      goal = input;
+      tpl = narrativeTemplates.find(t => t.id === narrativeSelectedId);
+      if (tpl === undefined) {
+        const list = narrativeTemplates.map(t => `${t.id}（${t.name}）`).join('、');
+        return { kind: 'error', text: input === ''
+          ? `未选中故事线。先在输入框工具行「故事线」chip 选择，或 /maze-story <模板> [目标]。可用：${list}`
+          : `未选中故事线。可用：${list}；或 /maze-story <模板> [目标] 显式指定。` };
+      }
+    }
+    try {
+      const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
+      const message = composeNarrativeMessage(tpl, hostNameOf, goal);
+      // 直达发送：故事线作为带 snapshot 源的上下文消息入队启程——模型收到完整 content，
+      // 聊天界面按「上下文注入」折叠卡渲染（与 time-context 同款形态），不刷屏
+      await invocation.agent.followup(createUserMessage({
+        content: [{ type: 'text', text: message }],
+        source: { kind: 'maze-story', form: 'snapshot', sections: [{ name: `故事线启程 · 《${tpl.name}》`, text: message }] },
+      }));
+      return { kind: 'success', text: `故事线已启程：《${tpl.name}》${goal === '' ? '（当前会话先出基石与子任务清单，等你确认）' : ''}` };
+    } catch (err) {
+      return { kind: 'error', text: `故事线投递失败：${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  ctx.inject(['commands'], (cmdCtx: { commands: { register: (def: { name: string; description: string; input?: { hint: string }; handler: (invocation: unknown) => unknown }) => () => void }; effect: (fn: () => () => void) => void }) => {
+    cmdCtx.effect(() => cmdCtx.commands.register({
+      name: 'maze-story',
+      description: '开启一条故事线（叙事工作流）',
+      input: { hint: '[模板 id 或名] [一句话目标]（不带模板=用工具行选中的故事线）' },
+      handler: invocation => handleStoryCommand(invocation as { agent: Agent; rawInput: string }),
+    }));
+  });
+
+  // ---- HTTP 路由（软依赖：无 webServer 服务的宿主组合时静默不装，其余功能不受影响）----
   ctx.inject(['webServer'], (webCtx: { webServer: { register: (def: { kind: 'exact'; path: string; handler: RouteHandler }) => () => void }; effect: (fn: () => () => void) => void }) => {
     // ---- 小记（notes）路由 ----------------------------------------------------------
     // 每请求新建 store：构造只是归一 baseUrl（无握手状态）；inboxProjectId 从
@@ -444,7 +658,7 @@ export function apply(ctx: any, config: Config): void {
         }, SSE_HEARTBEAT_MS);
         sseClients.add(client);
         // 连接建立即回发当前快照（重连后的补偿也靠这一次回发）
-        client.write(JSON.stringify(statePayload()));
+        client.write(slimFrame());
         req.on('close', () => { client.close(); });
         res.on?.('close', () => { client.close(); });
       }),
@@ -722,6 +936,139 @@ export function apply(ctx: any, config: Config): void {
         await store.deleteNote(body.id as number);
         return { ok: true };
       });
+    }),
+    // ---- 故事线（narratives）路由 ----------------------------------------------------
+    // 快照：模板（合并视图）+ 故事线场次（新→旧，最多 20 场）
+    // 可用模型清单：llm 服务每请求重新解析（晚装载/热重载都能恢复；一次性捕获会把空表永久缓存住）
+    // IIFE 是因为这段位于 disposer 数组里，声明必须包进表达式
+    (() => {
+      type LlmLike = { listProviders(): { id: string; label?: string }[]; listModels(provider: string): Promise<{ provider: string; id: string; name: string }[]> };
+      let modelsCache: { at: number; payload: { providers: { id: string; label?: string }[]; models: { provider: string; id: string; name: string }[] } } | undefined;
+      return registerRoute(webCtx.webServer, '/maze/models', async (req: RouteReq, res: RouteRes) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
+        if (modelsCache !== undefined && Date.now() - modelsCache.at < 60_000) {
+          return sendJson(res, 200, modelsCache.payload);
+        }
+        const llmLike = ctx.get('llm') as LlmLike | undefined;
+        if (llmLike === undefined) return sendJson(res, 503, { error: 'llm 服务不可用' });
+        const providers = llmLike.listProviders();
+        // 空 provider 表不进缓存：llm 刚起还没注册完时保持可重试
+        if (providers.length === 0) return sendJson(res, 200, { providers, models: [] });
+        // 并行拉取；单个 provider 失败不拖垮整张清单（模型列表是辅助输入）
+        const settled = await Promise.allSettled(providers.map(p => llmLike.listModels(p.id)));
+        const models: { provider: string; id: string; name: string }[] = [];
+        for (const r of settled) {
+          if (r.status === 'fulfilled') models.push(...r.value);
+        }
+        const payload = { providers, models };
+        modelsCache = { at: Date.now(), payload };
+        sendJson(res, 200, payload);
+      });
+    })(),
+    registerRoute(webCtx.webServer, '/maze/narratives/state', (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
+      // stages 随模板下发（与 statePayload 的 storylines 视图同一形状）
+      sendJson(res, 200, { templates: narrativeTemplates.map(t => templateView(t)), runs, selectedTemplateId: narrativeSelectedId, narrativeVersion: narrativeVersionRef.value });
+    }),
+    // 模板编辑：PUT = upsert（接待员/参数/文案可编辑；builtin 标记归代码所有，PUT 剥离）；
+    // DELETE = 删除（内置/config 来源走墓碑防复活；store 来源直接消失）
+    registerRoute(webCtx.webServer, '/maze/narratives/template', async (req: RouteReq, res: RouteRes) => {
+      if (req.method === 'PUT') {
+        // 上限与校验边界对齐：12 环 × 2000 字提示词（UTF-8 中文 3 字节）可达 ~72KB
+        const body = await readJsonBody(req, BODY_MAX_NARRATIVES) as { template?: Record<string, unknown> } | null | undefined;
+        if (body === null || body === undefined || typeof body.template !== 'object' || body.template === null) {
+          return sendJson(res, 400, { error: 'body 应为 {template: {...}}' });
+        }
+        const { builtin: _builtin, ...rest } = body.template;
+        let validated: NarrativeTemplate;
+        try {
+          validated = validateNarrativeTemplate(rest);
+        } catch (err) {
+          return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        // 新建受容量上限（编辑既有不受影响）
+        const isEdit = narrativeTemplates.some(t => t.id === validated.id);
+        if (!isEdit && narrativeTemplates.length >= NARRATIVES_MAX) {
+          return sendJson(res, 400, { error: `故事线模板已达上限 ${NARRATIVES_MAX} 条` });
+        }
+        // 名字唯一（轨迹按《名》归档）：重名在合并层会整体拒绝，这里提前给 400 更友好
+        if (narrativeTemplates.some(t => t.id !== validated.id && t.name === validated.name)) {
+          return sendJson(res, 400, { error: `已有名为「${validated.name}」的故事线（轨迹按名归档，名字必须唯一）` });
+        }
+        // 名字撞 id 在 mergeNarratives 同样是硬拒绝：这里先拦，错误保持 400（客户端输入错）而不是落进兜底 500
+        if (narrativeTemplates.some(t => t.id !== validated.id && t.id === validated.name)) {
+          return sendJson(res, 400, { error: `故事线名「${validated.name}」与已有模板 id 冲突` });
+        }
+        // store 只落 UI 编辑结果（同规则语义：不把内置/config 基底冻结进 store）
+        const nextTemplates = [...narrativeStoreTemplates.filter(t => t.id !== validated.id), validated];
+        const nextDeleted = narrativeDeletedIds.filter(id => id !== validated.id);
+        try {
+          commitNarratives(nextTemplates, nextDeleted);
+        } catch (err) {
+          return sendJson(res, 500, { error: `故事线模板保存失败: ${String(err)}` });
+        }
+        scheduleBroadcast();
+        return sendJson(res, 200, { ok: true, template: narrativeTemplates.find(t => t.id === validated.id) });
+      }
+      if (req.method === 'DELETE') {
+        const body = await readJsonBody(req) as { templateId?: string } | null | undefined;
+        if (body === null || body === undefined || typeof body.templateId !== 'string') {
+          return sendJson(res, 400, { error: 'body 应为 {templateId}' });
+        }
+        const target = narrativeTemplates.find(t => t.id === body.templateId);
+        if (target === undefined) return sendJson(res, 404, { error: `unknown template "${body.templateId}"` });
+        const nextTemplates = narrativeStoreTemplates.filter(t => t.id !== target.id);
+        const needsTombstone = BUILTIN_TEMPLATES.some(t => t.id === target.id)
+          || configNarratives.some(t => t.id === target.id);
+        const nextDeleted = needsTombstone
+          ? [...new Set([...narrativeDeletedIds, target.id])]
+          : narrativeDeletedIds.filter(id => id !== target.id);
+        // 选中项被删：先清选中再一次性落盘（chip 回到「未选择」）；写失败上抛 500，
+        // 避免"盘上选中指向已删模板而广播说已清"或"删了又落第二次"的分叉
+        const previousSelectedId = narrativeSelectedId; // 写失败时回滚，避免内存/盘上选中分叉
+        if (narrativeSelectedId === target.id) narrativeSelectedId = '';
+        try {
+          commitNarratives(nextTemplates, nextDeleted);
+        } catch (err) {
+          narrativeSelectedId = previousSelectedId;
+          return sendJson(res, 500, { error: `故事线模板保存失败: ${String(err)}` });
+        }
+        scheduleBroadcast();
+        return sendJson(res, 200, { ok: true });
+      }
+      return sendJson(res, 405, { error: 'method not allowed' });
+    }),
+    // chip 选中态：POST {templateId}（'' 允许=取消选择）
+    registerRoute(webCtx.webServer, '/maze/narratives/select', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { templateId?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.templateId !== 'string') {
+        return sendJson(res, 400, { error: 'body 应为 {templateId}' });
+      }
+      if (body.templateId !== '' && !narrativeTemplates.some(t => t.id === body.templateId)) {
+        return sendJson(res, 404, { error: `unknown template "${body.templateId}"` });
+      }
+      const previousSelectedId = narrativeSelectedId;
+      narrativeSelectedId = body.templateId;
+      try { commitNarratives(narrativeStoreTemplates, narrativeDeletedIds); } catch (err) {
+        // 落盘失败回滚内存选中：避免快照/广播与盘上 store 分叉
+        narrativeSelectedId = previousSelectedId;
+        return sendJson(res, 500, { error: `选中态保存失败: ${String(err)}` });
+      }
+      scheduleBroadcast();
+      return sendJson(res, 200, { ok: true, selectedTemplateId: narrativeSelectedId });
+    }),
+    // 合成故事线消息（轮回按钮与预览用）
+    registerRoute(webCtx.webServer, '/maze/narratives/compose', async (req: RouteReq, res: RouteRes) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+      const body = await readJsonBody(req) as { templateId?: string; goal?: unknown } | null | undefined;
+      if (body === null || body === undefined || typeof body.templateId !== 'string') {
+        return sendJson(res, 400, { error: 'body 应为 {templateId, goal?}' });
+      }
+      const tpl = narrativeTemplates.find(t => t.id === body.templateId);
+      if (tpl === undefined) return sendJson(res, 404, { error: `unknown template "${body.templateId}"` });
+      const goal = typeof body.goal === 'string' ? body.goal : '';
+      return sendJson(res, 200, { template: { id: tpl.id, name: tpl.name }, message: composeNarrativeMessage(tpl, hostNameOf, goal) });
     }),
     ];
     webCtx.effect(() => () => {
