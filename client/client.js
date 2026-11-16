@@ -2181,7 +2181,7 @@ function NumPicker({ value, min, max, onChange }) {
 const hostNameOfId = (id) => appearanceState.hosts.find((h) => h.id === id)?.name ?? id;
 
 /** 新环工厂：环职责由位置决定（首环=当前会话拆解/中间环逐子任务/带回溯=质检/
- * 末环收束）。首环在当前会话执行、不需要接待员（actors 空数组）。 */
+ * 末环收束）。首环在当前会话执行、不需要接待员（hosts 空数组）。 */
 function newLayer(seq, isFirst) {
   return {
     id: `act-${seq}`, name: isFirst ? '拆解' : '处理', prompt: '',
@@ -2245,7 +2245,7 @@ function StoryModal({ initial, onDone }) {
       decompose: initial.decompose !== false,
       layers: (initial.layers ?? []).map((l) => ({
         id: l.id, name: l.name ?? '', prompt: l.prompt ?? '',
-        actors: (l.hosts ?? []).map((a) => ({ hostId: a.hostId, agent: a.agent ?? '', model: a.model ?? '', parallel: a.parallel ?? 1 })),
+        hosts: (l.hosts ?? []).map((a) => ({ hostId: a.hostId, agent: a.agent ?? '', model: a.model ?? '', parallel: a.parallel ?? 1 })),
         retry: l.retry === undefined ? undefined : { toLayerId: l.retry.toLayerId, maxRounds: l.retry.maxRounds },
       })),
     };
@@ -2254,7 +2254,7 @@ function StoryModal({ initial, onDone }) {
   const [busy, setBusy] = useState(false);
   const setLayer = (i, patch) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
   // 纯功能式更新：直接在 setDraft 的 d 上计算，防渲染闭包里的旧 draft 覆盖并发改动
-  const setActor = (li, ai, patch) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, actors: l.hosts.map((a, k) => (k === ai ? { ...a, ...patch } : a)) } : l)) }));
+  const setActor = (li, ai, patch) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, hosts: l.hosts.map((a, k) => (k === ai ? { ...a, ...patch } : a)) } : l)) }));
   // 移动环：回溯目标必须保持“更早”——移动后若有回溯指向同位/更晚的环就拦截
   // （按钮点击是顺序用户操作，读渲染闭包里的 draft 即可，无并发写者）
   const moveLayer = (i, dir) => {
@@ -2277,7 +2277,7 @@ function StoryModal({ initial, onDone }) {
     while (used.has(`act-${seq}`)) seq += 1;
     return { ...d, layers: [...d.layers, newLayer(seq, false)] };
   });
-  const addActor = (li) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, actors: [...l.hosts, { hostId: appearanceState.hosts[0]?.id ?? 'dolores', agent: '', model: '', parallel: 1 }] } : l)) }));
+  const addActor = (li) => setDraft((d) => ({ ...d, layers: d.layers.map((l, j) => (j === li ? { ...l, hosts: [...l.hosts, { hostId: appearanceState.hosts[0]?.id ?? 'dolores', agent: '', model: '', parallel: 1 }] } : l)) }));
   const submit = async () => {
     if (draft.name.trim() === '') { setErr('故事线名不能为空'); return; }
     if (draft.layers.some((l) => l.name.trim() === '')) { setErr('每一环都要有环名'); return; }
@@ -2288,7 +2288,7 @@ function StoryModal({ initial, onDone }) {
     try {
       // requestJson 对非 2xx 直接 throw（错误文案进 catch），成功载荷无 error 字段
       // 首环在当前会话执行（无接待员）：保存时归一为空数组，旧数据自然收敛
-      const layers = draft.layers.map((l, idx) => (idx === 0 ? { ...l, actors: [] } : l));
+      const layers = draft.layers.map((l, idx) => (idx === 0 ? { ...l, hosts: [] } : l));
       await requestJson('PUT', ROUTE.narrativesTemplate, { template: { ...draft, layers } });
       onDone();
     } catch (e) {
@@ -2344,7 +2344,7 @@ function StoryModal({ initial, onDone }) {
               h('datalist', { id: `dshm-models-${i}-${ai}` }, modelOptionsFor(a.model).map((o) => h('option', { key: o.value, value: o.value }, o.label)))),
             h('div', { className: 'dshm-host-cell' }, h('span', { className: 'dshm-mini-label' }, '最大并行数'),
               h(NumPicker, { value: a.parallel, min: 1, max: 8, onChange: (v) => setActor(i, ai, { parallel: v }) })),
-            l.hosts.length <= 1 ? null : h('button', { className: 'dshm-btn dshm-btn-ghost dshm-host-x', title: '移除接待员', onClick: () => setLayer(i, { actors: l.hosts.filter((_, j) => j !== ai) }) }, '✕'))),
+            l.hosts.length <= 1 ? null : h('button', { className: 'dshm-btn dshm-btn-ghost dshm-host-x', title: '移除接待员', onClick: () => setLayer(i, { hosts: l.hosts.filter((_, j) => j !== ai) }) }, '✕'))),
           i === 0 ? null : (l.hosts.length >= 8 ? null : h('button', { className: 'dshm-add', onClick: () => addActor(i) }, '＋ 添加接待员')),
           i === 0
             ? h('div', { className: 'dshm-hint' }, draft.decompose ? '当前会话执行：任务确认与子任务拆解在本会话完成，仅提示词可配置' : '当前会话执行：确认任务即可（不拆分），仅提示词可配置')
