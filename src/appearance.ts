@@ -35,6 +35,8 @@ export interface HostConfig {
   rotate: boolean;
   /** 手动指定的接待员 id（rotate=false 时生效；空串/失效时回落首位启用者） */
   manualHostId: string;
+  /** 悬浮球定位：free=自由拖拽坐标（本设备记忆）；auto=跟随消息输入框右侧（输入卡片右缘外） */
+  positionMode: 'auto' | 'free';
 }
 
 /** 台词分组固定顺序（校验遍历与 UI 分组展示共用） */
@@ -98,7 +100,7 @@ function defaultHostEntry(id: string, avatar: string): HostEntry {
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   version: 1,
   background: { enabled: false, image: '', opacity: 1, chatOpacity: 1 },
-  host: { size: 44, pinned: true, hidden: false, rotate: false, manualHostId: DEFAULT_HOST_ID },
+  host: { size: 44, pinned: true, hidden: false, rotate: false, manualHostId: DEFAULT_HOST_ID, positionMode: 'auto' },
   hosts: DEFAULT_HOST_ORDER.map((id) => defaultHostEntry(id, FALLBACK_EMOJI[id] ?? '🧚')),
   avatars: [],
 };
@@ -324,6 +326,11 @@ export function validateAppearance(raw: unknown): AppearanceConfig {
   } else {
     manualHostId = ''; // 显式空串=回落首位启用者
   }
+  // 定位模式：auto=跟随输入框（默认形态，老配置缺省该字段=跟随）；free=自由坐标
+  if (sp.positionMode !== undefined && sp.positionMode !== 'auto' && sp.positionMode !== 'free') {
+    throw new Error('host.positionMode 只能是 auto 或 free');
+  }
+  const positionMode: 'auto' | 'free' = sp.positionMode ?? DEFAULT_APPEARANCE.host.positionMode;
 
   // 接待员名册：缺省=默认名册（迁移/出厂路径已在外面装配）；逐位校验
   if (input.hosts !== undefined && !Array.isArray(input.hosts)) {
@@ -383,7 +390,7 @@ export function validateAppearance(raw: unknown): AppearanceConfig {
   return {
     version: 1,
     background: { enabled: bg.enabled === true, image, opacity, chatOpacity },
-    host: { size, pinned, hidden, rotate, manualHostId },
+    host: { size, pinned, hidden, rotate, manualHostId, positionMode },
     hosts,
     avatars,
   };

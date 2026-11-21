@@ -137,7 +137,7 @@ function fallbackHostEntry() {
 let appearanceState = {
   version: 1,
   background: { enabled: false, image: '', opacity: 1, chatOpacity: 1 },
-  host: { size: 44, pinned: false, hidden: false, rotate: false, manualHostId: '' },
+  host: { size: 44, pinned: false, hidden: false, rotate: false, manualHostId: '', positionMode: 'auto' },
   hosts: [fallbackHostEntry()],
   avatars: [],
 };
@@ -163,31 +163,63 @@ function fetchAppearance(force = false) {
 
 /* ---- 外观镜像的派生工具：觉醒者解析 / 台词取用 / 克隆合并 ---------------- */
 
-/** 觉醒者记忆键前缀：按会话分键（dsh-maze-awakened:<sessionId>）——同会话稳定
- *  （含重载），切换会话各归各的觉醒者，新会话首次亮相才随机挑一位。 */
-const AWAKEN_KEY = 'dsh-maze-awakened';
+/** 觉醒者记忆：会话 id → 接待员 id 的映射，localStorage 单键 JSON 持久保存。
+ *  早前用 sessionStorage 按会话分键——标签页/应用一关记忆就丢，重启后同一会话
+ *  又随机换人（用户报"重启后接待员变了"）；localStorage 跨重启，"一经确定
+ *  即固定"才真正成立。LRU 上限防会话越开越多无限增长。 */
+const AWAKENED_MAP_KEY = 'dsh-maze-awakened-map';
+const AWAKENED_MAP_MAX = 64;
+
+/** 读映射（损坏即作废重记，不影响其他数据）；键序即 LRU 序（先旧后新）。
+ *  除解析失败外还要防"解析成功但不是对象"：数字/字符串/数组等损坏形态下，
+ *  后续对原始值赋属性在严格模式（ES 模块恒严格）会 TypeError，炸的是渲染路径。 */
+function readAwakenedMap() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AWAKENED_MAP_KEY) ?? '{}');
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch { return {}; }
+}
+
+function writeAwakenedMap(map) {
+  try { window.localStorage.setItem(AWAKENED_MAP_KEY, JSON.stringify(map)); } catch { /* 隐私模式禁存储：仅本页有效，可接受 */ }
+}
 
 /**
- * 当前觉醒的接待员：rotate=true 时从启用者里按会话随机选一位（存
- * sessionStorage，同会话重载不换人）；rotate=false 用 manualHostId
- * （失效/为空回落首位启用者）。名册全停用时回落内置兜底形象。
- * sessionId 缺省（设置页等无会话上下文）用整标签页共享键，仅作展示。
+ * 当前觉醒的接待员：按会话持久记忆（跨重启不换人）。
+ * 首次亮相按当时配置定人——rotate 随机挑一位 / 指定模式用 manualHostId
+ * （失效/为空回落首位启用者）；此后切换配置、重启应用都不影响已定人的会话。
+ * 名册全停用回落内置兜底形象；sessionId 缺省（无会话上下文的调用点）现算不落盘。
  */
 function awakenedHost(sessionId) {
   const enabled = appearanceState.hosts.filter((entry) => entry.enabled);
   if (enabled.length === 0) return fallbackHostEntry();
-  if (!appearanceState.host.rotate) {
-    const manual = enabled.find((entry) => entry.id === appearanceState.host.manualHostId);
-    return manual ?? enabled[0];
+  if (sessionId === undefined || sessionId === '') {
+    // 无会话上下文（设置页预览等）：按当前配置现算，不写入记忆
+    return appearanceState.host.rotate
+      ? enabled[Math.floor(Math.random() * enabled.length)]
+      : (enabled.find((entry) => entry.id === appearanceState.host.manualHostId) ?? enabled[0]);
   }
-  const key = sessionId ? `${AWAKEN_KEY}:${sessionId}` : AWAKEN_KEY;
-  let stored = null;
-  try { stored = window.sessionStorage.getItem(key); } catch { /* 隐私模式禁存储：每次随机，可接受 */ }
-  let picked = enabled.find((entry) => entry.id === stored);
-  if (picked === undefined) {
-    picked = enabled[Math.floor(Math.random() * enabled.length)];
-    try { window.sessionStorage.setItem(key, picked.id); } catch { /* 同上 */ }
+  // 每个会话的接待员一经指定就固定（持久映射）：之后切换随机/指定配置、重启
+  // 都只影响新会话，已开会话不换人——接待员与故事的连续性优先于配置变更。
+  const map = readAwakenedMap();
+  const remembered = enabled.find((entry) => entry.id === map[sessionId]);
+  if (remembered !== undefined) {
+    // 命中即刷新 LRU：删了重插，该会话排到最新
+    delete map[sessionId];
+    map[sessionId] = remembered.id;
+    writeAwakenedMap(map);
+    return remembered;
   }
+  // 首次亮相才看配置：随机觉醒掷一位；指定模式用 manualHostId（失效回落首位启用者）。
+  const picked = appearanceState.host.rotate
+    ? enabled[Math.floor(Math.random() * enabled.length)]
+    : (enabled.find((entry) => entry.id === appearanceState.host.manualHostId) ?? enabled[0]);
+  map[sessionId] = picked.id;
+  // 超上限淘汰最旧会话的记忆（键序首位）
+  const keys = Object.keys(map);
+  if (keys.length > AWAKENED_MAP_MAX) delete map[keys[0]];
+  writeAwakenedMap(map);
   return picked;
 }
 
@@ -528,6 +560,8 @@ function ensureStyle() {
   style.textContent = `
 /* ---- 悬浮球与气泡（常驻通知层，与设置页无关） ------------------------ */
 .dshm-ball-wrap{position:fixed;z-index:70;width:var(--dshm-ball-size,44px);height:var(--dshm-ball-size,44px);pointer-events:auto}
+/* 跟随输入框的缓动拖尾：rAF 逐帧给新坐标，transition 把硬跟抹成磁性跟随 */
+.dshm-follow{transition:left .2s ease-out, top .2s ease-out}
 .dshm-ball{width:var(--dshm-ball-size,44px);height:var(--dshm-ball-size,44px);
   border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:grab;user-select:none;touch-action:none;
   font-size:calc(var(--dshm-ball-size,44px) * .45);
@@ -539,7 +573,7 @@ function ensureStyle() {
 .dshm-ball.dragging{cursor:grabbing;transform:scale(1.06,.94)}
 .dshm-ball.pinned{cursor:default}
 /* 右键菜单：固定/隐藏接待员（动作即时落宿主配置） */
-.dshm-menu{position:fixed;z-index:71;min-width:96px;padding:4px;border-radius:10px;pointer-events:auto;
+.dshm-menu{position:fixed;z-index:71;padding:4px;border-radius:10px;pointer-events:auto;
   background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.16));
   box-shadow:0 8px 28px rgba(0,0,0,.45);animation:dshm-pop .12s ease-out}
 .dshm-menu-item{display:flex;align-items:center;gap:6px;width:100%;padding:7px 10px;border:none;border-radius:7px;
@@ -986,11 +1020,16 @@ function DoloresOverlay(props) {
   // 同时启动设置导航图标补丁轮询（见 patchNavIconOnce 注释：apply 侧定时器
   // 在该运行时会被静默停掉，只有组件 effect 驱动的定时器可靠）。
   useEffect(() => {
-    const saved = loadHostPos();
-    setPos(saved === null ? defaultPos() : clampPos(saved.x, saved.y));
+    // auto=贴输入框自动跟随（不读本设备记忆）；free=自由坐标记忆
+    if (appearanceState.host.positionMode === 'auto') setPos(autoPos());
+    else {
+      const saved = loadHostPos();
+      setPos(saved === null ? defaultPos() : clampPos(saved.x, saved.y));
+    }
     const listener = (cfg) => {
       setPinned(cfg.host.pinned === true);
       setHidden(cfg.host.hidden === true);
+      setAnchored(cfg.host.positionMode === 'auto');
       setAwakened(awakenedHost(sessionIdRef.current));
     };
     appearanceListeners.add(listener);
@@ -1000,6 +1039,38 @@ function DoloresOverlay(props) {
       window.clearInterval(navTimer);
     };
   }, []);
+
+  /** 跟随输入框：球贴输入卡片（含工具行/发送按钮的外框）右侧 14px，垂直居中对齐
+   *  整张卡片——按输入行居中时行高≈球高，观感近似顶对齐（用户报不对）；
+   *  卡片=输入行+工具行，对卡片居中才符合"输入框旁"的直觉。
+   *  类名取语义后缀 _card/_root（哈希前缀随构建变，语义后缀稳定）；
+   *  没有输入面时退默认右下角。 */
+  const autoPos = () => {
+    const ce = document.querySelector('[contenteditable="true"]');
+    if (ce === null) return defaultPos();
+    const card = ce.closest('[class*="_card"]') ?? ce.closest('[class*="_root"]') ?? ce;
+    const box = card.getBoundingClientRect();
+    const sz = appearanceState.host.size;
+    return clampPos(box.right + 14, box.top + box.height / 2 - sz / 2);
+  };
+  /** 跟随输入框开关（宿主配置持久化，右键菜单/接待员页共用一条 patchAppearance 路径） */
+  const [anchored, setAnchored] = useState(appearanceState.host.positionMode === 'auto');
+  // 跟随：每帧对齐（rAF）。早前 1s 轮询在会话切换/输入框布局动画期间要晚一拍
+  // 才把球"跳"上去；逐帧测量输入卡片矩形，球与卡片同步移动，无跳变。
+  // 指纹去重：位置没变不 setState，静止时零渲染开销。隐藏时不跟随（球不渲染）。
+  useEffect(() => {
+    if (!anchored || hidden) return;
+    let raf = 0;
+    let last = '';
+    const track = () => {
+      const next = autoPos();
+      const fp = `${Math.round(next.x)},${Math.round(next.y)}`;
+      if (fp !== last) { last = fp; setPos(next); }
+      raf = window.requestAnimationFrame(track);
+    };
+    raf = window.requestAnimationFrame(track);
+    return () => window.cancelAnimationFrame(raf);
+  }, [anchored, hidden]);
 
   // 会话切换：觉醒者按会话分键各自记忆——切到哪个会话就还原哪个会话的觉醒者
   //（随机觉醒下不再出现“新会话的接待员覆盖所有会话”）。影子 ref 供订阅回调用。
@@ -1193,6 +1264,9 @@ function DoloresOverlay(props) {
   };
 
   const onPointerDown = (e) => {
+    // 自动模式下开始拖拽=想自由摆放：切回 free（乐观补丁即时生效，pos 已在锚点处无缝接续）。
+    // 固定态不切：pinned 禁拖、拖动不会发生，"拖动即切自由"的前提是用户真的拖了。
+    if (anchored && !pinned) patchAppearance({ host: { positionMode: 'free' } });
     if (pinned || pos === null) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { grabX: e.clientX - pos.x, grabY: e.clientY - pos.y, moved: false };
@@ -1235,6 +1309,10 @@ function DoloresOverlay(props) {
     patchAppearance({ host: { pinned: !pinned } });
     setMenu(null);
   };
+  const menuToggleAnchored = () => {
+    patchAppearance({ host: { positionMode: anchored ? 'free' : 'auto' } });
+    setMenu(null);
+  };
   const menuHideHost = () => {
     patchAppearance({ host: { hidden: true } });
     setMenu(null);
@@ -1258,7 +1336,8 @@ function DoloresOverlay(props) {
 
   return h('div', null,
     hidden ? null : h('div', {
-      className: 'dshm-ball-wrap',
+      // 跟随模式挂 dshm-follow：left/top 走 0.2s 缓动（拖尾观感）；拖拽中摘掉防跟手延迟
+      className: `dshm-ball-wrap${anchored && !dragging ? ' dshm-follow' : ''}`,
       'data-demeanor': demeanor,
       'data-session': sessionId ?? '',
       style: pos === null ? undefined : { left: `${pos.x}px`, top: `${pos.y}px` },
@@ -1266,7 +1345,7 @@ function DoloresOverlay(props) {
     },
       h('div', {
         className: `dshm-ball${alerting ? ' alert' : ''}${dragging ? ' dragging' : ''}${pinned ? ' pinned' : ''}${landing ? ' land' : ''}`,
-        title: `${awakened.name} 个人助手（拖拽移动${pinned ? '，已固定' : ''}；右键固定/隐藏）`,
+        title: `${awakened.name} 个人助手（拖拽移动${pinned ? '，已固定' : ''}${anchored ? '，跟随输入框' : ''}；右键更多）`,
         onPointerDown,
         onPointerMove,
         onPointerUp,
@@ -1290,6 +1369,10 @@ function DoloresOverlay(props) {
         className: 'dshm-menu-item', role: 'menuitemcheckbox', 'aria-checked': pinned,
         onClick: menuTogglePinned,
       }, pinned ? '取消固定' : '固定'),
+      h('button', {
+        className: 'dshm-menu-item', role: 'menuitemcheckbox', 'aria-checked': anchored,
+        onClick: menuToggleAnchored,
+      }, anchored ? '取消跟随' : '跟随输入框'),
       h('div', { className: 'dshm-menu-sep' }),
       h('button', {
         className: 'dshm-menu-item', role: 'menuitem',
@@ -1471,8 +1554,9 @@ function MazeSection(props) {
           ? h('span', { className: 'dshm-badge' }, pendingCount) : null,
       )),
     ),
-    // key 随模块切换：模块组件整体重挂载，编辑中状态/轮询生命周期互不渗漏
-    h(mod.component, { key: mod.id }),
+    // key 随模块切换：模块组件整体重挂载，编辑中状态/轮询生命周期互不渗漏；
+    // sessionId 供接待员页标记“当前会话”的觉醒者（其他模块忽略）
+    h(mod.component, { key: mod.id, sessionId }),
   );
 }
 
@@ -1921,7 +2005,7 @@ function HostEditor({ initial, isNew, onConfirm, onCancel, onZoom }) {
   );
 }
 
-function DoloresModule() {
+function DoloresModule({ sessionId }) {
   const [draft, setDraft] = useState(() => cloneAppearance(appearanceState));
   const [saved, setSaved] = useState(() => cloneAppearance(appearanceState)); // 最近一次保存点（放弃=回到它）
   const [busy, setBusy] = useState(false);
@@ -2012,7 +2096,8 @@ function DoloresModule() {
     setMsg(null);
   };
 
-  const awakened = awakenedHost();
+  // 名册 ✦ 标记=当前会话的接待员（每会话一经确定就固定），而非某个全局陈旧值
+  const awakened = awakenedHost(sessionId);
   const enabledHosts = draft.hosts.filter((entry) => entry.enabled);
 
   return h('div', { className: 'dshm-mod' },
@@ -2066,8 +2151,18 @@ function DoloresModule() {
           h('i'),
         ),
       ),
+      h('div', { className: 'dshm-field', style: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' } },
+        h('span', null, '跟随输入框（位置贴消息框右侧）'),
+        h('label', { className: 'dshm-switch' },
+          h('input', {
+            type: 'checkbox', checked: liveHost.positionMode === 'auto',
+            onChange: (e) => patchAppearance({ host: { positionMode: e.target.checked ? 'auto' : 'free' } }),
+          }),
+          h('i'),
+        ),
+      ),
       h('div', { className: 'dshm-hint' },
-        `随机觉醒=每个会话从启用的接待员里随机一位，各会话各自记忆、互不覆盖；关闭后用指定接待员。右键悬浮球可快捷固定/隐藏。`),
+        `每个会话的接待员一经确定就不再变（重启应用也不换人）：随机觉醒下新会话随机挑一位；指定模式新会话用指定者。切换配置只影响之后的新会话，已开会话保持原接待员；名册的 ✦ 标记是当前会话的接待员。跟随输入框时拖动球即切回自由摆放。右键悬浮球可快捷固定/跟随/隐藏。`),
     ),
     // ---- 接待员名册 ----
     h('div', { className: 'dshm-sec' },

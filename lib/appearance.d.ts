@@ -28,6 +28,8 @@ export interface HostConfig {
     rotate: boolean;
     /** 手动指定的接待员 id（rotate=false 时生效；空串/失效时回落首位启用者） */
     manualHostId: string;
+    /** 悬浮球定位：free=自由拖拽坐标（本设备记忆）；auto=跟随消息输入框右侧（输入卡片右缘外） */
+    positionMode: 'auto' | 'free';
 }
 /** 台词分组固定顺序（校验遍历与 UI 分组展示共用） */
 export declare const LINE_GROUPS: readonly LineGroup[];
