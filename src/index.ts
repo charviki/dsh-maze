@@ -59,6 +59,7 @@ import { BUILTIN_TEMPLATE_IDS, BUILTIN_TEMPLATES, NARRATIVES_MAX, assembleNarrat
 import { loadNarrativesSync, narrativesPathOf, saveNarrativesSync } from './narrative-store.js';
 import { composeNarrativeMessage } from './narrative-script.js';
 import { closeStaleRuns, loadRunsSync, projectSessionEvent, runsPathOf, saveRunsSync, type RunRecord, type SessionEventLike } from './runs.js';
+import { NotifyTracker } from './notify.js';
 
 export const name = 'dsh-maze';
 
@@ -329,6 +330,8 @@ export function apply(ctx: any, config: Config): void {
   // 故事线场次：workflow 工具调用的投影留档（最近 RUNS_MAX 场，跨重启持久）
   const runsPath = runsPathOf(dataDir);
   let runs: readonly RunRecord[] = [];
+  // 后台通知状态机：跨会话审批等待 + 待答问题卡 + 卡死观察（纯内存，重启清零）
+  const notifyTracker = new NotifyTracker();
   try {
     runs = loadRunsSync(runsPath);
   } catch (err) {
@@ -409,6 +412,9 @@ export function apply(ctx: any, config: Config): void {
       current: currentUse === null ? null : { provider: currentUse.provider, model: currentUse.model, since: currentUse.at },
       narrative: { demeanor: currentDemeanor(record, now), since: record?.at ?? null },
       narratives,
+      // 后台通知（跨会话审批等待/卡死）：collectDue 挂在读上有意为之——轮询/广播
+      // 驱动补提节律，无需独立定时器
+      notifications: notifyTracker.collectDue(now),
       now,
       rules: rules.map(r => {
         const s = states.get(r.id);
@@ -480,6 +486,8 @@ export function apply(ctx: any, config: Config): void {
     // 会话身份防御式读取（跨构建 Session 类型可能滞后）
     const sid = typeof (session as { id?: unknown } | null)?.id === 'string' ? (session as { id: string }).id : undefined;
     if (sid !== undefined) lastActiveSessionId = sid;
+    // 后台通知：审批等待/问题卡/卡死观察（sid 缺失就不观察——通知必须带准确归属）
+    if (sid !== undefined && sid !== '') notifyTracker.observe(sid, event.type, event.data, typeof event.time === 'number' ? event.time : Date.now());
     // 故事线运行投影（workflow 工具调用/结果）：先于神态早退，任何事件形状都要过一遍
     // 会话身份缺失（理论上不会）时跳过投影：空串 sessionId 会把该事件混进全局轨迹
     let projected = runs;

@@ -401,6 +401,8 @@ function commitAppearance(cfg) {
 /** 悬浮球位置的本地持久化（每设备一份，存 localStorage；解析失败按未保存
  *  处理回退默认右下角位。固定/隐藏状态在宿主外观配置里，不在这里） */
 const HOST_POS_KEY = 'dsh-maze-host-pos';
+/** 冻结截止时间戳的 localStorage 键（0/缺省=未冻结；客户端本地口径不进宿主配置）。 */
+const FROZEN_KEY = 'dsh-maze-frozen-until';
 
 function loadHostPos() {
   try {
@@ -572,14 +574,27 @@ function ensureStyle() {
 .dshm-ball:hover{transform:scale(1.06)}
 .dshm-ball.dragging{cursor:grabbing;transform:scale(1.06,.94)}
 .dshm-ball.pinned{cursor:default}
-/* 右键菜单：固定/隐藏接待员（动作即时落宿主配置） */
-.dshm-menu{position:fixed;z-index:71;padding:4px;border-radius:10px;pointer-events:auto;
+/* 右键菜单：定位三态/冻结/隐藏（动作即时落宿主配置）。z-index 抬到应用层叠
+   之上——旧值会被贴边窗口（输入卡等）的上下文盖住 */
+.dshm-menu{position:fixed;z-index:9999;padding:6px;border-radius:12px;pointer-events:auto;
   background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.16));
-  box-shadow:0 8px 28px rgba(0,0,0,.45);animation:dshm-pop .12s ease-out}
+  box-shadow:0 12px 36px rgba(0,0,0,.5);animation:dshm-pop .12s ease-out}
+.dshm-menu-label{font-size:11px;padding:5px 10px 3px;color:var(--dsw-alias-text-tertiary,#9a9aa0)}
 .dshm-menu-item{display:flex;align-items:center;gap:6px;width:100%;padding:7px 10px;border:none;border-radius:7px;
   background:none;font-size:12px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary,#fff)}
 .dshm-menu-item:hover{background:var(--dsw-alias-bg-skeleton,rgba(255,255,255,.14))}
+/* 单选态标记：选中行加蓝色 tint 底（明暗两主题都可辨）+ 行尾 ✓（menuitemradio/menuitemcheckbox 通用） */
+.dshm-menu-item[aria-checked='true']{color:var(--dsw-alias-text-primary,#fff);font-weight:600;
+  background:rgba(64,120,230,.18)}
+.dshm-menu-item[aria-checked='true']::after{content:'✓';margin-left:auto;font-weight:600;color:#4176e6}
 .dshm-menu-sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l2,rgba(255,255,255,.09))}
+/* 问诊卡：字段行（k=灰色标签 / v=主色值） */
+.dshm-card{min-width:230px;max-width:280px}
+.dshm-card-head{display:flex;align-items:center;gap:8px;font-weight:600;margin:2px 0 6px;
+  padding-right:22px}
+.dshm-card-row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;font-size:12.5px}
+.dshm-card-k{color:var(--dsw-alias-text-tertiary,#9a9aa0);white-space:nowrap}
+.dshm-card-v{color:var(--dsw-alias-text-primary,#fff);text-align:right}
 /* 提醒态：2px 琥珀描边 + 柔光，确保任何主题下都能一眼识别 */
 .dshm-ball.alert{border-color:var(--dsw-static-amber-400,#F79D31);
   box-shadow:0 0 0 3px rgba(247,173,49,.25),0 4px 16px rgba(0,0,0,.35)}
@@ -806,6 +821,12 @@ function ensureStyle() {
   background:var(--dsw-alias-bg-layer-1,#232324);color:var(--dsw-alias-label-primary,#fff);
   font-size:12px;padding:4px 8px}
 .dshm-textarea{resize:vertical;min-height:44px;line-height:1.5;font-family:inherit}
+/* 分段单选（定位三态）：一行三枚胶囊，选中实底提亮 */
+.dshm-seg{display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12))}
+.dshm-seg-btn{flex:1;padding:6px 10px;border:none;background:none;font-size:12px;cursor:pointer;
+  color:var(--dsw-alias-label-primary,#fff)}
+.dshm-seg-btn + .dshm-seg-btn{border-left:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12))}
+.dshm-seg-btn.on{background:var(--dsw-alias-bg-skeleton,rgba(255,255,255,.14));font-weight:600}
 .dshm-ringcard .dshm-textarea{margin-top:8px}
 .dshm-pair{display:flex;gap:8px}
 .dshm-pair .dshm-field{flex:1}
@@ -994,6 +1015,21 @@ function DoloresOverlay(props) {
   const [hidden, setHidden] = useState(() => appearanceState.host.hidden === true);
   /** 右键菜单：null=关；{x,y}=弹出坐标（屏幕 px）。 */
   const [menu, setMenu] = useState(null);
+  /** 后台通知当前展示项（审批等待/卡死）；null=无。提醒气泡优先于它。 */
+  const [notify, setNotify] = useState(null);
+  /** 已点"知道了"的通知 key（kind:sessionId:nagAt）：同一轮补提不重复弹，下一轮 nagAt 变化再弹。 */
+  const notifiedRef = useRef(new Set());
+  /** 冻结截止时间戳（0=未冻结）：静音低语/提醒/通知，球体与动效照常活着。 */
+  const [frozenUntil, setFrozenUntil] = useState(() => {
+    const v = Number(window.localStorage.getItem(FROZEN_KEY) ?? 0);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  });
+  /** 冻结影子 ref：静音门在定时器/事件回调里读"此刻"状态，避免闭包过期。 */
+  const frozenRef = useRef(false);
+  /** 问诊卡：点球（无待读提醒时）切换；提醒/通知弹出时收起。 */
+  const [card, setCard] = useState(false);
+  /** 问诊卡"在场时长"的起点（页面挂载时刻，客户端本地口径）。 */
+  const mountedAtRef = useRef(Date.now());
   /** 拖拽进行态：grab 记录按住点相对球的偏移；moved 区分点击与拖拽。 */
   const dragRef = useRef(null);
   const [dragging, setDragging] = useState(false);
@@ -1015,13 +1051,42 @@ function DoloresOverlay(props) {
   /** 默认位 = 右下角（原 fixed 布局的 right/bottom 24px） */
   const defaultPos = () => clampPos(window.innerWidth - appearanceState.host.size - 24, window.innerHeight - appearanceState.host.size - 24);
 
+  /** 冻结写入的单一入口：localStorage（跨刷新）+ state + 影子 ref 三处同步。 */
+  const applyFreeze = (minutes) => {
+    const until = minutes > 0 ? Date.now() + minutes * 60_000 : 0;
+    if (until > 0) window.localStorage.setItem(FROZEN_KEY, String(until));
+    else window.localStorage.removeItem(FROZEN_KEY);
+    setFrozenUntil(until);
+    frozenRef.current = until > Date.now();
+    // 解冻即刻生效；进入冻结时把进行中的提示收掉（静音语义）
+    if (until > 0) { setNotify(null); setCard(false); }
+  };
+  const frozen = frozenUntil > Date.now();
+  useEffect(() => { frozenRef.current = frozen; }, [frozenUntil]);
+  // 跨窗口同步冻结：storage 事件只在"其他窗口"写入时触发，本窗写入走 applyFreeze
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== FROZEN_KEY) return;
+      const v = Number(e.newValue ?? 0);
+      setFrozenUntil(Number.isFinite(v) && v > 0 ? v : 0);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  /** 通知/问诊卡用的会话名：sessions store 里查 displayTitle，查不到退到尾号。 */
+  const sessionTitleOf = (sid) => {
+    const s = sessionsState?.byId?.[sid];
+    return (typeof s?.displayTitle === 'string' && s.displayTitle !== '') ? s.displayTitle : `会话 ${sid.slice(-6)}`;
+  };
+
   // 初始化：读取上次保存的位置；订阅宿主外观镜像（右键菜单/Dolores 页/
   // 其他窗口的保存都会推进 appearanceState，pinned/hidden 随之同步）。
   // 同时启动设置导航图标补丁轮询（见 patchNavIconOnce 注释：apply 侧定时器
   // 在该运行时会被静默停掉，只有组件 effect 驱动的定时器可靠）。
   useEffect(() => {
     // auto=贴输入框自动跟随（不读本设备记忆）；free=自由坐标记忆
-    if (appearanceState.host.positionMode === 'auto') setPos(autoPos());
+    if (appearanceState.host.positionMode === 'auto') setPos(autoPos() ?? defaultPos()); // 尚无输入面先落默认位，rAF 起来后会跟过去
     else {
       const saved = loadHostPos();
       setPos(saved === null ? defaultPos() : clampPos(saved.x, saved.y));
@@ -1043,13 +1108,17 @@ function DoloresOverlay(props) {
   /** 跟随输入框：球贴输入卡片（含工具行/发送按钮的外框）右侧 14px，垂直居中对齐
    *  整张卡片——按输入行居中时行高≈球高，观感近似顶对齐（用户报不对）；
    *  卡片=输入行+工具行，对卡片居中才符合"输入框旁"的直觉。
-   *  类名取语义后缀 _card/_root（哈希前缀随构建变，语义后缀稳定）；
-   *  没有输入面时退默认右下角。 */
+   *  类名取语义后缀 _card/_root（哈希前缀随构建变，语义后缀稳定）。
+   *  输入面不存在或不可见时返回 null（调用方原地等待）：审批弹窗等场景会
+   *  把输入区整个顶替掉——display:none 子树的矩形全 0，若照算会把球钳到
+   *  左上角（用户报"跳到左上角"）；原地等输入面回来再继续跟，最稳。 */
   const autoPos = () => {
     const ce = document.querySelector('[contenteditable="true"]');
-    if (ce === null) return defaultPos();
+    // getClientRects 为空=不可见（display:none/未布局）；零宽高同理兜底
+    if (ce === null || ce.getClientRects().length === 0) return null;
     const card = ce.closest('[class*="_card"]') ?? ce.closest('[class*="_root"]') ?? ce;
     const box = card.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) return null;
     const sz = appearanceState.host.size;
     return clampPos(box.right + 14, box.top + box.height / 2 - sz / 2);
   };
@@ -1064,6 +1133,8 @@ function DoloresOverlay(props) {
     let last = '';
     const track = () => {
       const next = autoPos();
+      // 跟丢（输入面被顶替）时原地等待：不更新坐标，输入面回来指纹变化自动续跟
+      if (next === null) { raf = window.requestAnimationFrame(track); return; }
       const fp = `${Math.round(next.x)},${Math.round(next.y)}`;
       if (fp !== last) { last = fp; setPos(next); }
       raf = window.requestAnimationFrame(track);
@@ -1083,10 +1154,11 @@ function DoloresOverlay(props) {
   // 隐藏态影子同步（低语定时器用）
   useEffect(() => { hiddenRef.current = hidden; }, [hidden]);
 
-  // 右键菜单关闭：点击菜单外任意处或 Esc；菜单容器自身 stopPropagation 拦下
+  // 右键菜单关闭：点击菜单外任意处或 Esc；菜单容器自身 stopPropagation 拦下。
+  // 问诊卡跟随同一关闭手势（点球也能切，这里是兜底）
   useEffect(() => {
     if (menu === null) return;
-    const close = () => setMenu(null);
+    const close = () => { setMenu(null); setCard(false); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     window.addEventListener('pointerdown', close);
     window.addEventListener('keydown', onKey);
@@ -1146,14 +1218,30 @@ function DoloresOverlay(props) {
     pendingFreshRef.current = data !== null && data.pending.some((r) => !seen.current.has(r.id));
   }, [data]);
 
-  // 新提醒检测：data 更新后找出未见过的 pending → 弹气泡（并收掉低语：提醒优先）
+  // 新提醒检测：data 更新后找出未见过的 pending → 弹气泡（并收掉低语/问诊卡：
+  // 提醒优先）。冻结期间只记已读不弹——解冻后不拿积压的旧提醒轰炸。
   useEffect(() => {
     if (data === null) return;
     const fresh = data.pending.filter((r) => !seen.current.has(r.id));
     if (fresh.length === 0) return;
     for (const r of data.pending) seen.current.add(r.id);
+    if (frozenRef.current) return;
     setWhisper(null);
+    setCard(false);
     setBubble({ reminder: fresh[fresh.length - 1], pinned: false });
+  }, [data]);
+
+  // 后台通知（跨会话审批等待/卡死）：弹第一条未读提示。提醒气泡在场时先不出
+  // （渲染层让位）；dismiss key 见 notifiedRef 注释——补提轮次变化会再次弹出，
+  // 这是刻意的（10 分钟还没人管，值得再叫一声）。页面不可见时不标已读：
+  // 标了就等于这一轮提示被静默烧掉，用户要再等 10 分钟补提。
+  useEffect(() => {
+    if (data === null || frozenRef.current || document.hidden) return;
+    const list = data.notifications ?? [];
+    const first = list.find((n) => !notifiedRef.current.has(`${n.kind}:${n.sessionId}:${n.nagAt}`));
+    if (first === undefined) return;
+    notifiedRef.current.add(`${first.kind}:${first.sessionId}:${first.nagAt}`);
+    setNotify(first);
   }, [data]);
 
   // 谢幕低语：轨迹榜首换人且已落幕 → 接待员一句中性谢幕词（不引用原剧台词；
@@ -1177,7 +1265,7 @@ function DoloresOverlay(props) {
     // 未落幕先不记 seen：从启程看起的场次，落幕那一帧才触发谢幕
     if (top.endedAt === undefined || top.endedAt === null) return;
     // 抑制帧（隐藏/气泡占位）不记 seen：下一次数据帧还能再试（与神态低语同规则）
-    if (hiddenRef.current || document.hidden || bubble !== null || whisper !== null) return;
+    if (hiddenRef.current || frozenRef.current || document.hidden || bubble !== null || whisper !== null || card) return;
     // 同帧有新提醒会触发气泡让位：不记 seen，等气泡消失后重评（deps 含 bubble/whisper，
     // 气泡 12s 自动收起会再跑本 effect，把被让位的谢幕补回来）
     if (pendingFreshRef.current) return;
@@ -1209,7 +1297,7 @@ function DoloresOverlay(props) {
     const prev = demeanorRef.current;
     demeanorRef.current = demeanor;
     if (prev === demeanor) return;
-    if (hiddenRef.current || document.hidden || bubble !== null || whisper !== null) return;
+    if (hiddenRef.current || frozenRef.current || document.hidden || bubble !== null || whisper !== null || card) return;
     const resultMoment = demeanor === 'done' || demeanor === 'failed';
     if (Date.now() - lastSpokenRef.current < (resultMoment ? 30_000 : 90_000)) return;
     if (!resultMoment && Math.random() > 0.7) return;
@@ -1230,7 +1318,7 @@ function DoloresOverlay(props) {
   // 静置神态 + 距上次台词 8 分钟以上才开口
   useEffect(() => {
     const timer = setInterval(() => {
-      if (demeanorRef.current !== 'idle' || hiddenRef.current || document.hidden) return;
+      if (demeanorRef.current !== 'idle' || hiddenRef.current || frozenRef.current || document.hidden) return;
       if (bubbleRef.current !== null || whisperRef.current !== null) return;
       if (Date.now() - lastSpokenRef.current < 8 * 60_000) return;
       const pool = linesFrom(awakenedHost(sessionIdRef.current), 'idle');
@@ -1254,16 +1342,20 @@ function DoloresOverlay(props) {
   const pending = data?.pending ?? [];
   const alerting = pending.length > 0;
 
-  /** 点击球（拖拽距离 < 4px 才算）：展开/收起气泡 */
+  /** 点击球（拖拽距离 < 4px 才算）：待读提醒 > 通知 > 问诊卡，逐级回落 */
   const toggleBubble = () => {
     if (bubble !== null && bubble.pinned) setBubble(null);
     else if (pending.length > 0) {
       for (const r of pending) seen.current.add(r.id);
       setBubble({ reminder: pending[pending.length - 1], pinned: true });
-    } else setBubble(null);
+    } else if (notify !== null) {
+      setNotify(null); // 通知在展：点球=知道了
+    } else setCard((c) => !c); // 问诊卡
   };
 
   const onPointerDown = (e) => {
+    // 只响应主键：右键（菜单）/中键不该触发"点击展开"或进入拖拽
+    if (e.button !== 0) return;
     // 自动模式下开始拖拽=想自由摆放：切回 free（乐观补丁即时生效，pos 已在锚点处无缝接续）。
     // 固定态不切：pinned 禁拖、拖动不会发生，"拖动即切自由"的前提是用户真的拖了。
     if (anchored && !pinned) patchAppearance({ host: { positionMode: 'free' } });
@@ -1280,6 +1372,8 @@ function DoloresOverlay(props) {
     setPos(next);
   };
   const onPointerUp = (e) => {
+    // 只响应主键（见 onPointerDown；右键的 up 属于菜单流程）
+    if (e.button !== 0) return;
     const d = dragRef.current;
     if (d === null) {
       // 固定态 onPointerDown 不建立拖拽（dragRef 恒 null），点击展开/收起气泡
@@ -1300,28 +1394,37 @@ function DoloresOverlay(props) {
     } else toggleBubble();
   };
 
-  // ---- 右键菜单：固定/隐藏（即时补丁宿主配置，见 patchAppearance） ----
+  // ---- 右键菜单：定位三态（互斥）/ 冻结 / 隐藏（即时补丁宿主配置，见 patchAppearance） ----
   const onContextMenu = (e) => {
     e.preventDefault(); // 压掉浏览器默认菜单
     setMenu({ x: e.clientX, y: e.clientY });
   };
-  const menuTogglePinned = () => {
-    patchAppearance({ host: { pinned: !pinned } });
-    setMenu(null);
-  };
-  const menuToggleAnchored = () => {
-    patchAppearance({ host: { positionMode: anchored ? 'free' : 'auto' } });
+  /**
+   * 定位三态写入（互斥：auto 清固定；free+pinned=固定位置）。
+   * 从"跟随输入框"直接进"固定位置"时，把此刻的跟随坐标转正落盘——球在哪
+   * 就定在哪，用户不需要先切自由再拖一遍。
+   */
+  const menuSetPosition = (mode) => {
+    if (mode === 'auto') patchAppearance({ host: { positionMode: 'auto', pinned: false } });
+    else if (mode === 'free') patchAppearance({ host: { positionMode: 'free', pinned: false } });
+    else {
+      if (pos !== null) saveHostPos(pos);
+      patchAppearance({ host: { positionMode: 'free', pinned: true } });
+    }
     setMenu(null);
   };
   const menuHideHost = () => {
     patchAppearance({ host: { hidden: true } });
     setMenu(null);
   };
-  /** 菜单定位：锚在右键点，向右下展开并钳入视口（约 116×88 的空间预留） */
-  const menuStyle = (m) => ({
-    left: `${Math.max(8, Math.min(m.x, window.innerWidth - 124))}px`,
-    top: `${Math.max(8, Math.min(m.y, window.innerHeight - 92))}px`,
-  });
+  /** 菜单定位：默认向右下展开；贴右/贴底时向左/向上翻开（菜单高 z-index，
+   *  不再被输入卡等应用窗口的层叠上下文盖住）。约 156×232 的空间预留。 */
+  const menuStyle = (m) => {
+    const W = 156, H = 232, margin = 8;
+    const x = m.x + W > window.innerWidth - margin ? Math.max(margin, m.x - W) : m.x;
+    const y = m.y + H > window.innerHeight - margin ? Math.max(margin, m.y - H) : m.y;
+    return { left: `${x}px`, top: `${y}px` };
+  };
 
   /** 气泡锚定：右缘对齐球右缘，上方空间够放上方、否则下方（水平钳入视口） */
   const bubbleStyle = (() => {
@@ -1345,7 +1448,7 @@ function DoloresOverlay(props) {
     },
       h('div', {
         className: `dshm-ball${alerting ? ' alert' : ''}${dragging ? ' dragging' : ''}${pinned ? ' pinned' : ''}${landing ? ' land' : ''}`,
-        title: `${awakened.name} 个人助手（拖拽移动${pinned ? '，已固定' : ''}${anchored ? '，跟随输入框' : ''}；右键更多）`,
+        title: `${awakened.name} 个人助手${frozen ? '（冻结中：提醒与低语静音）' : ''}（拖拽移动；右键更多）`,
         onPointerDown,
         onPointerMove,
         onPointerUp,
@@ -1358,21 +1461,43 @@ function DoloresOverlay(props) {
         : null),
     ),
     bubble !== null ? h(Bubble, { reminder: bubble.reminder, extra: Math.max(0, pending.length - 1), onAck: ack, style: bubbleStyle }) : null,
+    // 通知气泡：提醒不在场时才出（优先级次之），冻结静音
+    bubble === null && notify !== null && !frozen
+      ? h(NotificationBubble, { note: notify, title: sessionTitleOf(notify.sessionId), onAck: () => setNotify(null), style: bubbleStyle })
+      : null,
+    // 问诊卡：提醒/通知都不在场时的点击展开
+    bubble === null && notify === null && card
+      ? h(StatusCard, {
+          data, awakened, demeanor, frozen, frozenUntil,
+          positionLabel: anchored ? '跟随输入框' : pinned ? '固定位置' : '自由摆放',
+          mountedAt: mountedAtRef.current, onClose: () => setCard(false), style: bubbleStyle,
+        })
+      : null,
     // 低语随接待员一起隐藏（台词是她的自语，人不在就没有声音）
-    bubble === null && whisper !== null && !hidden ? h(WhisperBubble, { text: whisper, style: bubbleStyle }) : null,
+    bubble === null && notify === null && !card && whisper !== null && !hidden ? h(WhisperBubble, { text: whisper, style: bubbleStyle }) : null,
     menu === null ? null : h('div', {
       className: 'dshm-menu', role: 'menu', style: menuStyle(menu),
       // 菜单内部点击不冒泡到 window 的关闭监听（见菜单关闭 effect）
       onPointerDown: (e) => e.stopPropagation(),
     },
+      h('div', { className: 'dshm-menu-label' }, '定位'),
       h('button', {
-        className: 'dshm-menu-item', role: 'menuitemcheckbox', 'aria-checked': pinned,
-        onClick: menuTogglePinned,
-      }, pinned ? '取消固定' : '固定'),
+        className: 'dshm-menu-item', role: 'menuitemradio', 'aria-checked': anchored,
+        onClick: () => menuSetPosition('auto'),
+      }, '跟随输入框'),
       h('button', {
-        className: 'dshm-menu-item', role: 'menuitemcheckbox', 'aria-checked': anchored,
-        onClick: menuToggleAnchored,
-      }, anchored ? '取消跟随' : '跟随输入框'),
+        className: 'dshm-menu-item', role: 'menuitemradio', 'aria-checked': !anchored && !pinned,
+        onClick: () => menuSetPosition('free'),
+      }, '自由摆放'),
+      h('button', {
+        className: 'dshm-menu-item', role: 'menuitemradio', 'aria-checked': !anchored && pinned,
+        onClick: () => menuSetPosition('pin'),
+      }, '固定位置'),
+      h('div', { className: 'dshm-menu-sep' }),
+      h('button', {
+        className: 'dshm-menu-item', role: 'menuitem',
+        onClick: () => { applyFreeze(frozen ? 0 : 30); setMenu(null); },
+      }, frozen ? `解除冻结（剩 ${Math.max(0, Math.ceil((frozenUntil - Date.now()) / 60_000))} 分钟）` : '冻结 30 分钟'),
       h('div', { className: 'dshm-menu-sep' }),
       h('button', {
         className: 'dshm-menu-item', role: 'menuitem',
@@ -1503,6 +1628,51 @@ function WhisperBubble({ text, style }) {
   return h('div', { className: 'dshm-bubble dshm-whisper', style },
     h(MazeGlyph, { size: 14, className: 'dshm-bubble-maze' }),
     h('div', { className: 'dshm-bubble-msg' }, h(TypewriterText, { text })));
+}
+
+/** 通知气泡：跨会话审批等待/问题卡/卡死——后台会话"阻塞了却没人看得见"的提示。 */
+function NotificationBubble({ note, title, onAck, style }) {
+  const mins = Math.max(1, Math.round((Date.now() - note.since) / 60_000));
+  const text = note.kind === 'approval'
+    ? `「${title}」的审批在等你，已等 ${mins} 分钟。切过去看一眼？`
+    : note.kind === 'question'
+      ? `「${title}」有问题在等你回答，已等 ${mins} 分钟。切过去看一眼？`
+      : `「${title}」已经 ${mins} 分钟没有动静，可能卡住了。`;
+  return h('div', { className: 'dshm-bubble', style },
+    h(MazeGlyph, { size: 16, className: 'dshm-bubble-maze' }),
+    h('div', { className: 'dshm-bubble-msg' }, h(TypewriterText, { text })),
+    h('div', { className: 'dshm-bubble-actions' },
+      h('button', { className: 'dshm-btn dshm-btn-primary', onClick: onAck }, '知道了')));
+}
+
+/** 问诊卡：点球展开的现场快照（觉醒者/神态/在场/今日提醒/最近故事线/定位/冻结）。 */
+function StatusCard({ data, awakened, demeanor, frozen, frozenUntil, positionLabel, mountedAt, onClose, style }) {
+  const now = Date.now();
+  const mins = (t) => Math.max(0, Math.round((now - t) / 60_000));
+  // 今日提醒数：宿主 rules 视图已按本地日界过滤计数（firedToday），直接求和
+  const todayCount = (data?.rules ?? []).reduce((sum, r) => sum + (typeof r.firedToday === 'number' ? r.firedToday : 0), 0);
+  const lastRun = data?.storylines?.runs?.[0] ?? null;
+  // verdict → 轨迹行标记（✦ 抵达/⚠ 出岔/… 进行中），与故事线模块同符号
+  const RUN_VERDICT_MARK = { done: ' ✦', failed: ' ⚠' };
+  const runLabel = lastRun === null
+    ? '—'
+    : `${lastRun.templateName ?? '未命名'}${RUN_VERDICT_MARK[lastRun.verdict] ?? ' …'}`;
+  const row = (k, v) => h('div', { className: 'dshm-card-row' },
+    h('span', { className: 'dshm-card-k' }, k),
+    h('span', { className: 'dshm-card-v' }, v));
+  return h('div', { className: 'dshm-bubble dshm-card', style },
+    h(MazeGlyph, { size: 16, className: 'dshm-bubble-maze' }),
+    h('div', { className: 'dshm-card-head' },
+      h(AvatarView, { avatar: awakened.avatar }),
+      h('span', null, `${awakened.name} · 现场快照`)),
+    row('当前神态', DEMEANOR_LABELS[demeanor] ?? demeanor),
+    row('在场时长', `${mins(mountedAt)} 分钟`),
+    row('今日提醒', `${todayCount} 次`),
+    row('最近故事线', runLabel),
+    row('定位', positionLabel),
+    frozen ? row('冻结', `剩 ${Math.max(0, Math.ceil((frozenUntil - now) / 60_000))} 分钟`) : null,
+    h('div', { className: 'dshm-bubble-actions' },
+      h('button', { className: 'dshm-btn dshm-btn-primary', onClick: onClose }, '合上')));
 }
 
 /* ------------------------------------------------------------------ */
@@ -2141,28 +2311,23 @@ function DoloresModule({ sessionId }) {
           h('i'),
         ),
       ),
-      h('div', { className: 'dshm-field', style: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' } },
-        h('span', null, '固定位置（锁定后不可拖拽）'),
-        h('label', { className: 'dshm-switch' },
-          h('input', {
-            type: 'checkbox', checked: liveHost.pinned === true,
-            onChange: (e) => patchAppearance({ host: { pinned: e.target.checked } }),
-          }),
-          h('i'),
-        ),
-      ),
-      h('div', { className: 'dshm-field', style: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' } },
-        h('span', null, '跟随输入框（位置贴消息框右侧）'),
-        h('label', { className: 'dshm-switch' },
-          h('input', {
-            type: 'checkbox', checked: liveHost.positionMode === 'auto',
-            onChange: (e) => patchAppearance({ host: { positionMode: e.target.checked ? 'auto' : 'free' } }),
-          }),
-          h('i'),
-        ),
+      // 定位三选一（互斥）：与右键菜单同一组取值——跟随=auto、自由=free、固定=free+pinned
+      h('div', { className: 'dshm-field', style: { flexDirection: 'column', gap: '8px' } },
+        h('span', null, '悬浮球定位'),
+        h('div', { className: 'dshm-seg', role: 'radiogroup', 'aria-label': '悬浮球定位' }, ...[
+          { key: 'auto', label: '跟随输入框', on: liveHost.positionMode === 'auto' },
+          { key: 'free', label: '自由摆放', on: liveHost.positionMode !== 'auto' && liveHost.pinned !== true },
+          { key: 'pin', label: '固定位置', on: liveHost.positionMode !== 'auto' && liveHost.pinned === true },
+        ].map((opt) => h('button', {
+          key: opt.key, type: 'button', className: `dshm-seg-btn${opt.on ? ' on' : ''}`,
+          role: 'radio', 'aria-checked': opt.on,
+          onClick: () => patchAppearance({ host: opt.key === 'auto'
+            ? { positionMode: 'auto', pinned: false }
+            : opt.key === 'free' ? { positionMode: 'free', pinned: false } : { positionMode: 'free', pinned: true } }),
+        }, opt.label))),
       ),
       h('div', { className: 'dshm-hint' },
-        `每个会话的接待员一经确定就不再变（重启应用也不换人）：随机觉醒下新会话随机挑一位；指定模式新会话用指定者。切换配置只影响之后的新会话，已开会话保持原接待员；名册的 ✦ 标记是当前会话的接待员。跟随输入框时拖动球即切回自由摆放。右键悬浮球可快捷固定/跟随/隐藏。`),
+        `每个会话的接待员一经确定就不再变（重启应用也不换人）：随机觉醒下新会话随机挑一位；指定模式新会话用指定者。切换配置只影响之后的新会话，已开会话保持原接待员；名册的 ✦ 标记是当前会话的接待员。定位三态互斥：跟随输入框时拖动球即切回自由摆放；固定位置锁定当前坐标不可拖拽。右键悬浮球可快捷切换/冻结 30 分钟/隐藏。`),
     ),
     // ---- 接待员名册 ----
     h('div', { className: 'dshm-sec' },
