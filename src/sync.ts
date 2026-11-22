@@ -157,12 +157,30 @@ export function davUrl(conn: SyncConnection): string {
 }
 
 /**
- * 单次 WebDAV 请求（GET/PUT）。网络层错误（DNS/超时/TLS）向上抛带原因的
+ * 逐级创建 remotePath 的父目录（MKCOL）。坚果云等服务器在父集合不存在时
+ * PUT 返回 409，先建目录再重试。逐级（非仅最后一级）是为任意深度路径；
+ * 201=已建、405=已存在、200/301 也视为成功，其余状态返回 false 由调用方决定。
+ */
+export async function ensureDavParents(conn: SyncConnection): Promise<boolean> {
+  const segs = conn.remotePath.split('/').filter(s => s !== '');
+  // 去掉最后一段（那是文档本身，不是目录）
+  segs.pop();
+  let ok = true;
+  for (let i = 0; i < segs.length; i++) {
+    const path = `/${segs.slice(0, i + 1).join('/')}/`;
+    const res = await davRequest({ ...conn, remotePath: path }, 'MKCOL');
+    if (res.status !== 201 && res.status !== 405 && res.status !== 200 && res.status !== 301) ok = false;
+  }
+  return ok;
+}
+
+/**
+ * 单次 WebDAV 请求（GET/PUT/MKCOL）。网络层错误（DNS/超时/TLS）向上抛带原因的
  * Error；HTTP 状态由调用方解释（404=云端为空，2xx=成功，其余=远端拒绝）。
  */
 export async function davRequest(
   conn: SyncConnection,
-  method: 'GET' | 'PUT',
+  method: 'GET' | 'PUT' | 'MKCOL',
   body?: string,
 ): Promise<{ status: number; text: string }> {
   const auth = Buffer.from(`${conn.username}:${conn.password}`, 'utf8').toString('base64');

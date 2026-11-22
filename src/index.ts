@@ -58,7 +58,7 @@ import { VikunjaNoteStore } from './notes/vikunja.js';
 import { BUILTIN_TEMPLATE_IDS, BUILTIN_TEMPLATES, NARRATIVES_MAX, assembleNarrativeTemplates, mergeNarratives, storylinesVersion, validateNarrativeTemplate, type NarrativeTemplate } from './narratives.js';
 import { loadNarrativesSync, narrativesPathOf, saveNarrativesSync } from './narrative-store.js';
 import { composeNarrativeMessage } from './narrative-script.js';
-import { davRequest, loadSyncConnection, saveSyncConnection, summarizeBundle, validateSyncBundle, validateSyncConnection, type SyncBundle, type SyncConnection } from './sync.js';
+import { davRequest, ensureDavParents, loadSyncConnection, saveSyncConnection, summarizeBundle, validateSyncBundle, validateSyncConnection, type SyncBundle, type SyncConnection } from './sync.js';
 import { hostname } from 'node:os';
 import { closeStaleRuns, loadRunsSync, projectSessionEvent, runsPathOf, saveRunsSync, type RunRecord, type SessionEventLike } from './runs.js';
 import { NotifyTracker } from './notify.js';
@@ -1139,7 +1139,9 @@ export function apply(ctx: any, config: Config): void {
       } catch (err) {
         return sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
       }
-      if (resp.status === 404) return sendJson(res, 200, { empty: true });
+      // 404=云端为空；409=父目录不存在（坚果云对缺失集合的 GET 也回 409，
+      // 此时配置文档必然不存在，同样视为云端为空）
+      if (resp.status === 404 || resp.status === 409) return sendJson(res, 200, { empty: true });
       if (resp.status < 200 || resp.status >= 300) return sendJson(res, 502, { error: `WebDAV 服务器返回 ${resp.status}` });
       let bundle: SyncBundle;
       try {
@@ -1189,6 +1191,11 @@ export function apply(ctx: any, config: Config): void {
       let resp: { status: number; text: string };
       try {
         resp = await davRequest(conn, 'PUT', body);
+        // 父目录不存在（坚果云 409）：逐级 MKCOL 建目录后重试一次
+        if (resp.status === 409) {
+          const made = await ensureDavParents(conn);
+          if (made) resp = await davRequest(conn, 'PUT', body);
+        }
       } catch (err) {
         return sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -1214,7 +1221,8 @@ export function apply(ctx: any, config: Config): void {
       } catch (err) {
         return sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
       }
-      if (resp.status === 404) return sendJson(res, 400, { error: '云端还没有配置' });
+      // 404/409（父目录不存在）都=云端还没有配置
+      if (resp.status === 404 || resp.status === 409) return sendJson(res, 400, { error: '云端还没有配置' });
       if (resp.status < 200 || resp.status >= 300) return sendJson(res, 502, { error: `WebDAV 服务器返回 ${resp.status}` });
       let bundle: SyncBundle;
       try {

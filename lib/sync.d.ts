@@ -77,10 +77,16 @@ export declare function summarizeBundle(bundle: SyncBundle): SyncSummary;
 /** 远端文档完整 URL（server 已去尾斜杠、remotePath 已保头斜杠，直接拼接） */
 export declare function davUrl(conn: SyncConnection): string;
 /**
- * 单次 WebDAV 请求（GET/PUT）。网络层错误（DNS/超时/TLS）向上抛带原因的
+ * 逐级创建 remotePath 的父目录（MKCOL）。坚果云等服务器在父集合不存在时
+ * PUT 返回 409，先建目录再重试。逐级（非仅最后一级）是为任意深度路径；
+ * 201=已建、405=已存在、200/301 也视为成功，其余状态返回 false 由调用方决定。
+ */
+export declare function ensureDavParents(conn: SyncConnection): Promise<boolean>;
+/**
+ * 单次 WebDAV 请求（GET/PUT/MKCOL）。网络层错误（DNS/超时/TLS）向上抛带原因的
  * Error；HTTP 状态由调用方解释（404=云端为空，2xx=成功，其余=远端拒绝）。
  */
-export declare function davRequest(conn: SyncConnection, method: 'GET' | 'PUT', body?: string): Promise<{
+export declare function davRequest(conn: SyncConnection, method: 'GET' | 'PUT' | 'MKCOL', body?: string): Promise<{
     status: number;
     text: string;
 }>;
