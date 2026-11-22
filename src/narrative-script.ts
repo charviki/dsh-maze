@@ -112,8 +112,8 @@ export function composeNarrativeMessage(tpl: NarrativeTemplate, hostOf: HostName
    [ { "goal": "...", "files": [...], "accept": "..." } ]`
   // 确认动作=真弹窗：ask_user_question 的问题卡（选项+自定义输入），挂起时
   // 宿主通知状态机按"待答弹窗"提醒其他窗口的接待员（通用逻辑，非故事线专用）
-  const confirmVia = `3. 确认：调用 ask_user_question 工具请用户核对——header「${tpl.name}·开演确认」，question 列出上述任务（或子任务编号清单），options：确认开演（Recommended，一句话说明影响范围）/ 需要调整（一句话说明会等你补充）。
-   回答「确认开演」或跳过 → 按下述方式执行；回答「需要调整」或自定义文本 → 按补充意见修订任务（必要时再确认一次）。`
+  const confirmVia = `3. 确认：调用 ask_user_question 工具请用户核对——header「${tpl.name}·启程确认」，question 列出上述任务（或子任务编号清单），options：启程（Recommended，一句话说明影响范围）/ 需要调整（一句话说明会等你补充）。
+   回答「启程」或跳过 → 按下述方式执行；回答「需要调整」或自定义文本 → 按补充意见修订任务（必要时再确认一次）。`
   if (single) {
     return `【${tpl.name}】目标：${goalLine}
 

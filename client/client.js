@@ -64,6 +64,10 @@ const ROUTE = {
   narrativesTemplate: '/maze/narratives/template',
   narrativesCompose: '/maze/narratives/compose',
   narrativesSelect: '/maze/narratives/select',
+  syncConfig: '/maze/sync/config',
+  syncPeek: '/maze/sync/peek',
+  syncUpload: '/maze/sync/upload',
+  syncDownload: '/maze/sync/download',
   events: '/maze/events',
 };
 
@@ -330,6 +334,10 @@ html[${BACKDROP_ATTR}] body[data-ds-dark-theme]{--dsw-alias-bg-base:transparent;
 /* Dolores 的提醒/低语气泡随「聊天框透明度」滑杆（弹框与输入框同进退）；仅在背景开启时生效 */
 html[${BACKDROP_ATTR}] .dshm-bubble{background-color:rgb(255 255 255/var(--dshm-chat-alpha,1))}
 html[${BACKDROP_ATTR}] body[data-ds-dark-theme] .dshm-bubble{background-color:rgb(53 54 56/var(--dshm-chat-alpha,1))}
+/* 背景开启时问诊卡/摘要卡跟随聊天透明度：浅色主题（白纱底）改黑墨字——通缉令/账本式的简约可读；
+   深色主题底是深灰纱、主题浅字本就清晰，维持默认不动 */
+html[${BACKDROP_ATTR}] .dshm-card-k{color:#5a5d63;font-weight:500}
+html[${BACKDROP_ATTR}] .dshm-card-v{color:#1d1f24;font-weight:600}
 .dshm-backdrop{position:fixed;inset:0;z-index:-2;pointer-events:none;overflow:hidden;user-select:none}
 .dshm-backdrop>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .dshm-backdrop>.dshm-scrim{position:absolute;inset:0;background:rgb(255 255 255/var(--dshm-veil-1,1))}
@@ -398,6 +406,8 @@ function commitAppearance(cfg) {
   applyAppearance(cfg);
 }
 
+// 拖动退出跟随的位移阈值：小于它的指针移动视为点击抖动，不改变定位模式
+const DRAG_EXIT_FOLLOW_PX = 16;
 /** 悬浮球位置的本地持久化（每设备一份，存 localStorage；解析失败按未保存
  *  处理回退默认右下角位。固定/隐藏状态在宿主外观配置里，不在这里） */
 const HOST_POS_KEY = 'dsh-maze-host-pos';
@@ -588,10 +598,15 @@ function ensureStyle() {
   background:rgba(64,120,230,.18)}
 .dshm-menu-item[aria-checked='true']::after{content:'✓';margin-left:auto;font-weight:600;color:#4176e6}
 .dshm-menu-sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l2,rgba(255,255,255,.09))}
-/* 问诊卡：字段行（k=灰色标签 / v=主色值） */
-.dshm-card{min-width:230px;max-width:280px}
-.dshm-card-head{display:flex;align-items:center;gap:8px;font-weight:600;margin:2px 0 6px;
-  padding-right:22px}
+/* 问诊卡/摘要卡字段行（k=灰色标签 / v=主色值）：设置页同步模块云端预览也用。
+   max-width 380 容得下 340px 大头像；min-width 保持 230——摘要卡不被大头像规格拉宽 */
+/* 问诊卡专属：背景开启时黑墨字规则在上方 backdrop 注入区，底仍跟随聊天透明度 */
+.dshm-card{min-width:230px;max-width:380px}
+.dshm-card-close{position:absolute;left:6px;top:6px;z-index:1;width:20px;height:20px;display:flex;
+  align-items:center;justify-content:center;border:none;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.06));
+  border-radius:6px;color:var(--dsw-alias-text-tertiary,#9a9aa0);font-size:12px;cursor:pointer;padding:0}
+.dshm-card-close:hover{color:var(--dsw-alias-label-primary,#fff);background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.06))}
+.dshm-card-head{display:flex;align-items:center;justify-content:center;font-weight:600;margin:2px 0 6px}
 .dshm-card-row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;font-size:12.5px}
 .dshm-card-k{color:var(--dsw-alias-text-tertiary,#9a9aa0);white-space:nowrap}
 .dshm-card-v{color:var(--dsw-alias-text-primary,#fff);text-align:right}
@@ -1128,7 +1143,7 @@ function DoloresOverlay(props) {
   // 才把球"跳"上去；逐帧测量输入卡片矩形，球与卡片同步移动，无跳变。
   // 指纹去重：位置没变不 setState，静止时零渲染开销。隐藏时不跟随（球不渲染）。
   useEffect(() => {
-    if (!anchored || hidden) return;
+    if (!anchored || dragging || hidden) return;
     let raf = 0;
     let last = '';
     const track = () => {
@@ -1141,7 +1156,7 @@ function DoloresOverlay(props) {
     };
     raf = window.requestAnimationFrame(track);
     return () => window.cancelAnimationFrame(raf);
-  }, [anchored, hidden]);
+  }, [anchored, dragging, hidden]);
 
   // 会话切换：觉醒者按会话分键各自记忆——切到哪个会话就还原哪个会话的觉醒者
   //（随机觉醒下不再出现“新会话的接待员覆盖所有会话”）。影子 ref 供订阅回调用。
@@ -1154,19 +1169,33 @@ function DoloresOverlay(props) {
   // 隐藏态影子同步（低语定时器用）
   useEffect(() => { hiddenRef.current = hidden; }, [hidden]);
 
-  // 右键菜单关闭：点击菜单外任意处或 Esc；菜单容器自身 stopPropagation 拦下。
-  // 问诊卡跟随同一关闭手势（点球也能切，这里是兜底）
+  // 右键菜单/问诊卡关闭：点击两者之外任意处或 Esc。两个例外——
+  // 点卡片内部（选文字/按钮/头像）不收；点球不算"外部"（球自身点击是 toggleBubble
+  // 切换语义，若这里先收、pointerup 又开会互相打架）。
   useEffect(() => {
-    if (menu === null) return;
-    const close = () => { setMenu(null); setCard(false); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    window.addEventListener('pointerdown', close);
+    if (menu === null && !card) return;
+    const onDown = (e) => {
+      const t = e.target;
+      if (card && t instanceof Node && typeof t.closest === 'function' && t.closest('.dshm-bubble')) return;
+      if (t instanceof Node && typeof t.closest === 'function' && t.closest('.dshm-ball-wrap')) {
+        if (menu !== null) setMenu(null);
+        return;
+      }
+      if (menu !== null) setMenu(null);
+      if (card) setCard(false);
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (menu !== null) setMenu(null);
+      if (card) setCard(false);
+    };
+    window.addEventListener('pointerdown', onDown);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('pointerdown', onDown);
       window.removeEventListener('keydown', onKey);
     };
-  }, [menu]);
+  }, [menu, card]);
 
   // 视口尺寸变化时把球拉回可见区（只钳制不还原默认位）
   useEffect(() => {
@@ -1356,12 +1385,13 @@ function DoloresOverlay(props) {
   const onPointerDown = (e) => {
     // 只响应主键：右键（菜单）/中键不该触发"点击展开"或进入拖拽
     if (e.button !== 0) return;
-    // 自动模式下开始拖拽=想自由摆放：切回 free（乐观补丁即时生效，pos 已在锚点处无缝接续）。
-    // 固定态不切：pinned 禁拖、拖动不会发生，"拖动即切自由"的前提是用户真的拖了。
-    if (anchored && !pinned) patchAppearance({ host: { positionMode: 'free' } });
+    // 注意：这里不能把 auto 切成 free——点球开卡/开气泡也是 pointerdown，
+    // 一按就切会把跟随模式悄悄吃掉（用户报"每次重启都不是跟随"的根因）。
+    // 切换时机在 onPointerMove：拖动真发生后才脱离跟随。
     if (pinned || pos === null) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { grabX: e.clientX - pos.x, grabY: e.clientY - pos.y, moved: false };
+    // sx/sy=起始指针位：松手时按总位移判"真拖动"（点击抖动几像素不算）
+    dragRef.current = { grabX: e.clientX - pos.x, grabY: e.clientY - pos.y, sx: e.clientX, sy: e.clientY, moved: false };
     setDragging(true);
   };
   const onPointerMove = (e) => {
@@ -1387,6 +1417,11 @@ function DoloresOverlay(props) {
       // pointerId 可能已随指针类型切换失效，捕获随元素卸载自动释放
     }
     if (pos !== null) saveHostPos(pos); // 只存位置；固定/隐藏在宿主配置
+    // 跟随模式的退出判据=松手时总位移超过阈值：点击过程的指针抖动（常见几像素）
+    // 不算拖动，只有真的把球挪了一段才视为想自由摆放
+    if (anchored && d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > DRAG_EXIT_FOLLOW_PX) {
+      patchAppearance({ host: { positionMode: 'free' } });
+    }
     if (d.moved) {
       // 松手落地回弹：短动效后复位（组件卸载后 setState 是无害 no-op）
       setLanding(true);
@@ -1465,7 +1500,7 @@ function DoloresOverlay(props) {
     bubble === null && notify !== null && !frozen
       ? h(NotificationBubble, { note: notify, title: sessionTitleOf(notify.sessionId), onAck: () => setNotify(null), style: bubbleStyle })
       : null,
-    // 问诊卡：提醒/通知都不在场时的点击展开
+    // 问诊卡：提醒/通知都不在场时的点击展开（卡内头像为大图）
     bubble === null && notify === null && card
       ? h(StatusCard, {
           data, awakened, demeanor, frozen, frozenUntil,
@@ -1645,7 +1680,7 @@ function NotificationBubble({ note, title, onAck, style }) {
       h('button', { className: 'dshm-btn dshm-btn-primary', onClick: onAck }, '知道了')));
 }
 
-/** 问诊卡：点球展开的现场快照（觉醒者/神态/在场/今日提醒/最近故事线/定位/冻结）。 */
+/** 问诊卡：点球展开的现场快照（神态/在场/今日提醒/最近故事线/定位/冻结）。 */
 function StatusCard({ data, awakened, demeanor, frozen, frozenUntil, positionLabel, mountedAt, onClose, style }) {
   const now = Date.now();
   const mins = (t) => Math.max(0, Math.round((now - t) / 60_000));
@@ -1661,18 +1696,22 @@ function StatusCard({ data, awakened, demeanor, frozen, frozenUntil, positionLab
     h('span', { className: 'dshm-card-k' }, k),
     h('span', { className: 'dshm-card-v' }, v));
   return h('div', { className: 'dshm-bubble dshm-card', style },
+    // 右上迷宫纹章水印；头部=左上角 ✕ + 大头像（无名字文字）
     h(MazeGlyph, { size: 16, className: 'dshm-bubble-maze' }),
     h('div', { className: 'dshm-card-head' },
-      h(AvatarView, { avatar: awakened.avatar }),
-      h('span', null, `${awakened.name} · 现场快照`)),
+      h('button', { className: 'dshm-card-close', onClick: onClose, 'aria-label': '合上', title: '合上（Esc）' }, '✕'),
+      // 定尺外壳：340px 略小于源图（出厂接待员头像 384px），放大不超源分辨率，
+      // 避免把图片底衬/卡片背板放大到可见
+      h('span', {
+        style: { width: '340px', height: '340px', flex: 'none', display: 'block', borderRadius: '50%' },
+      }, h(AvatarView, { avatar: awakened.avatar })),
+    ),
     row('当前神态', DEMEANOR_LABELS[demeanor] ?? demeanor),
     row('在场时长', `${mins(mountedAt)} 分钟`),
     row('今日提醒', `${todayCount} 次`),
     row('最近故事线', runLabel),
     row('定位', positionLabel),
-    frozen ? row('冻结', `剩 ${Math.max(0, Math.ceil((frozenUntil - now) / 60_000))} 分钟`) : null,
-    h('div', { className: 'dshm-bubble-actions' },
-      h('button', { className: 'dshm-btn dshm-btn-primary', onClick: onClose }, '合上')));
+    frozen ? row('冻结', `剩 ${Math.max(0, Math.ceil((frozenUntil - now) / 60_000))} 分钟`) : null);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2870,12 +2909,125 @@ function StoryQuickButton() {
   );
 }
 
+function SyncModule() {
+  // 连接表单（本地态）：打开时用 GET 的脱敏视图回填，密码永不回传——已保存过
+  // 则留空占位（服务端留空=沿用已存密码）；peek/上传/下载前都会先把表单落盘，
+  // 所以"测试并查看云端"不需要先点保存连接
+  const [conn, setConn] = useState({ server: '', username: '', password: '', remotePath: '' });
+  const [configured, setConfigured] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  // peek 结果：{empty:true} 或云端摘要（下载前确认覆盖用）
+  const [cloud, setCloud] = useState(null);
+  const [armed, setArmed] = useArmedConfirm(2000);
+
+  useEffect(() => {
+    let stopped = false;
+    requestJson('GET', ROUTE.syncConfig).then((view) => {
+      if (stopped || !view?.configured) return;
+      setConfigured(true);
+      setConn((c) => ({ ...c, server: view.server ?? '', username: view.username ?? '', remotePath: view.remotePath ?? '' }));
+    }).catch(() => {});
+    return () => { stopped = true; };
+  }, []);
+
+  const run = async (label, action) => {
+    setBusy(true); setMsg(null);
+    try {
+      await action();
+    } catch (e) {
+      setMsg({ ok: false, text: `${label}失败：${e?.message ?? e}` });
+    } finally { setBusy(false); }
+  };
+
+  // 动作前先把表单落盘：peek/上传/下载用的都是已保存的连接，
+  // 表单改了没保存就点动作会用到旧值——干脆动作即保存
+  const persistConn = async () => {
+    await requestJson('PUT', ROUTE.syncConfig, conn);
+    setConfigured(true);
+  };
+
+  const saveConn = () => run('保存连接', async () => {
+    await persistConn();
+    setMsg({ ok: true, text: '连接已保存' });
+  });
+
+  const peek = () => run('查看云端', async () => {
+    await persistConn();
+    const view = await postJson(ROUTE.syncPeek, {});
+    setCloud(view);
+    if (view?.empty) setMsg({ ok: true, text: '连接成功：云端还没有配置（先从某台机器上传）' });
+  });
+
+  const upload = () => run('上传', async () => {
+    await persistConn();
+    const r = await postJson(ROUTE.syncUpload, {});
+    setMsg({ ok: true, text: `已上传到云端（${Math.round((r?.bytes ?? 0) / 1024)} KB · ${new Date(r?.uploadedAt ?? Date.now()).toLocaleString()}）` });
+    // 立即回读摘要，让"云端现在是什么"与刚上传的一致
+    setCloud(await postJson(ROUTE.syncPeek, {}).catch(() => null));
+  });
+
+  const download = () => run('下载', async () => {
+    await persistConn();
+    const r = await postJson(ROUTE.syncDownload, {});
+    const parts = [];
+    if (r?.applied?.rules) parts.push(`提醒规则 ${r.applied.rules} 条`);
+    if (r?.applied?.appearance) parts.push('外观配置');
+    if (r?.applied?.narratives) parts.push(`故事线 ${r.applied.narratives} 条`);
+    setMsg({ ok: true, text: `已应用云端配置（${parts.length > 0 ? parts.join(' · ') : '无变更段'} · 来自 ${r?.machine ?? '?'} · ${new Date(r?.uploadedAt ?? 0).toLocaleString()}）` });
+    setArmed(false);
+    // 热生效：外观走 appearanceListeners 通知所有面板/悬浮球，规则走 stateListeners（SSE 已广播，这里兜底强拉）
+    fetchAppearance(true).catch(() => {});
+    fetchState(true).catch(() => {});
+  });
+
+  const cloudSummary = () => {
+    if (cloud === null) return null;
+    if (cloud.empty) return h('div', { className: 'dshm-empty' }, '云端为空');
+    const rulesText = cloud.rules.length > 0 ? cloud.rules.map((r) => r.name || r.id).join('、') : '无';
+    const nText = cloud.narratives === null ? '（上传机上没有）' : `${cloud.narratives.templates.length} 条${cloud.narratives.templates.length > 0 ? `：${cloud.narratives.templates.map((t) => t.name || t.id).join('、')}` : ''}`;
+    const aText = cloud.appearance === null ? '（上传机上没有）' : `背景${cloud.appearance.hasBackground ? `有${cloud.appearance.backgroundEnabled ? '（开）' : '（关）'}` : '无'} · 接待员 ${cloud.appearance.hostCount} 位`;
+    return h('div', { className: 'dshm-card' },
+      h('div', { className: 'dshm-card-head' }, `云端配置 · ${new Date(cloud.uploadedAt).toLocaleString()} · 来自 ${cloud.machine}`),
+      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '提醒规则'), h('span', { className: 'dshm-card-v' }, `${cloud.rules.length} 条：${rulesText}${cloud.ruleDeletedCount > 0 ? `（另有 ${cloud.ruleDeletedCount} 条删除记录）` : ''}`)),
+      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '外观'), h('span', { className: 'dshm-card-v' }, aText)),
+      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '故事线'), h('span', { className: 'dshm-card-v' }, nText)));
+  };
+
+  return h('div', null,
+    h('p', { className: 'dshm-hint' }, '把提醒规则、外观、故事线打包上传到 WebDAV（坚果云等），另一台机器下载即用，不用再拷数据文件。'),
+    h('div', { className: 'dshm-editor' },
+      h('div', { className: 'dshm-field' }, h('span', null, '服务器地址'),
+        h('input', { className: 'dshm-input', value: conn.server, onChange: (e) => setConn((c) => ({ ...c, server: e.target.value })), placeholder: 'https://dav.jianguoyun.com/dav/' })),
+      h('div', { className: 'dshm-pair' },
+        h('div', { className: 'dshm-field' }, h('span', null, '用户名'),
+          h('input', { className: 'dshm-input', value: conn.username, onChange: (e) => setConn((c) => ({ ...c, username: e.target.value })), placeholder: '坚果云邮箱账号' })),
+        h('div', { className: 'dshm-field' }, h('span', null, '应用密码'),
+          h('input', { className: 'dshm-input', type: 'password', value: conn.password, onChange: (e) => setConn((c) => ({ ...c, password: e.target.value })), placeholder: configured ? '已保存，留空沿用上次密码' : '网页端 安全选项→添加应用密码' }))),
+      h('div', { className: 'dshm-field' }, h('span', null, '远程路径'),
+        h('input', { className: 'dshm-input', value: conn.remotePath, onChange: (e) => setConn((c) => ({ ...c, remotePath: e.target.value })), placeholder: '/dsh-maze/config.json' })),
+      h('div', { className: 'dshm-editor-actions' },
+        msg !== null ? h('span', { className: 'dshm-hint', style: { color: msg.ok ? 'var(--dsw-alias-label-secondary,inherit)' : '#d54541' } }, msg.text) : h('span', null),
+        h('button', { className: 'dshm-btn dshm-btn-ghost', disabled: busy, onClick: peek }, '测试并查看云端'),
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy, onClick: saveConn }, '保存连接')),
+      h('span', { className: 'dshm-hint' }, '应用密码是坚果云「安全选项→添加应用密码」生成的 WebDAV 专用密码（可单独吊销）；连接信息以明文存于本机插件数据目录（仅本机用户可读）。')),
+    cloudSummary(),
+    h('div', { className: 'dshm-editor', style: { marginTop: '10px' } },
+      h('div', { className: 'dshm-field' }, h('span', null, '手动同步'),
+        h('span', { className: 'dshm-hint', style: { marginTop: '0' } }, '冲突策略 last-write-wins：下载会整体覆盖本机三份配置（故事线运行轨迹与小记不进同步包），覆盖前先看上面的云端摘要。')),
+      h('div', { className: 'dshm-editor-actions' },
+        h('span', null),
+        h('button', { className: `dshm-btn ${armed ? 'dshm-line-del-armed' : 'dshm-btn-ghost'}`, disabled: busy || !configured, onClick: armed ? download : (e) => { e.stopPropagation(); setArmed(true); } }, armed ? '确认覆盖本机？' : '下载覆盖本机'),
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy || !configured, onClick: upload }, busy ? '同步中…' : '上传本机配置'))));
+}
+
 const MODULES = [
   { id: 'appearance', label: '个性化', component: AppearanceModule },
   { id: 'dolores', label: '接待员', component: DoloresModule },
   { id: 'reminders', label: '提醒', component: RemindersModule },
   { id: 'narratives', label: '故事线', component: NarrativesModule },
   { id: 'notes', label: '小记', component: NotesModule },
+  { id: 'sync', label: '同步', component: SyncModule },
 ];
 
 /*
