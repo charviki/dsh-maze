@@ -589,12 +589,12 @@ function ensureStyle() {
 .dshm-menu{position:fixed;z-index:9999;padding:6px;border-radius:12px;pointer-events:auto;
   background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.16));
   box-shadow:0 12px 36px rgba(0,0,0,.5);animation:dshm-pop .12s ease-out}
-.dshm-menu-label{font-size:11px;padding:5px 10px 3px;color:var(--dsw-alias-text-tertiary,#9a9aa0)}
+.dshm-menu-label{font-size:11px;padding:5px 10px 3px;color:var(--dsw-alias-label-tertiary,#9a9aa0)}
 .dshm-menu-item{display:flex;align-items:center;gap:6px;width:100%;padding:7px 10px;border:none;border-radius:7px;
   background:none;font-size:12px;text-align:left;cursor:pointer;color:var(--dsw-alias-label-primary,#fff)}
 .dshm-menu-item:hover{background:var(--dsw-alias-bg-skeleton,rgba(255,255,255,.14))}
 /* 单选态标记：选中行加蓝色 tint 底（明暗两主题都可辨）+ 行尾 ✓（menuitemradio/menuitemcheckbox 通用） */
-.dshm-menu-item[aria-checked='true']{color:var(--dsw-alias-text-primary,#fff);font-weight:600;
+.dshm-menu-item[aria-checked='true']{color:var(--dsw-alias-label-primary,#fff);font-weight:600;
   background:rgba(64,120,230,.18)}
 .dshm-menu-item[aria-checked='true']::after{content:'✓';margin-left:auto;font-weight:600;color:#4176e6}
 .dshm-menu-sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l2,rgba(255,255,255,.09))}
@@ -604,12 +604,22 @@ function ensureStyle() {
 .dshm-card{min-width:230px;max-width:380px}
 .dshm-card-close{position:absolute;left:6px;top:6px;z-index:1;width:20px;height:20px;display:flex;
   align-items:center;justify-content:center;border:none;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.06));
-  border-radius:6px;color:var(--dsw-alias-text-tertiary,#9a9aa0);font-size:12px;cursor:pointer;padding:0}
+  border-radius:6px;color:var(--dsw-alias-label-tertiary,#9a9aa0);font-size:12px;cursor:pointer;padding:0}
 .dshm-card-close:hover{color:var(--dsw-alias-label-primary,#fff);background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.06))}
 .dshm-card-head{display:flex;align-items:center;justify-content:center;font-weight:600;margin:2px 0 6px}
 .dshm-card-row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;font-size:12.5px}
-.dshm-card-k{color:var(--dsw-alias-text-tertiary,#9a9aa0);white-space:nowrap}
-.dshm-card-v{color:var(--dsw-alias-text-primary,#fff);text-align:right}
+.dshm-card-k{color:var(--dsw-alias-label-tertiary,#9a9aa0);white-space:nowrap}
+.dshm-card-v{color:var(--dsw-alias-label-primary,#fff);text-align:right}
+/* 同步模块的云端摘要卡：纵向分节（标题/时间·机器/各段），不与问诊卡共用宽度约束 */
+.dshm-cloud{margin-top:10px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09));
+  border-radius:12px;padding:10px 12px;background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.06))}
+.dshm-cloud-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}
+.dshm-cloud-meta{font-size:11px;color:var(--dsw-alias-label-tertiary,#9a9aa0);margin:2px 0 6px}
+.dshm-cloud-sec{display:flex;flex-direction:column;gap:2px;padding:5px 0;border-top:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09))}
+.dshm-cloud-sec:first-of-type{border-top:none}
+.dshm-cloud-sec-k{font-size:11px;color:var(--dsw-alias-label-tertiary,#9a9aa0)}
+.dshm-cloud-sec-v{font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-primary,#fff);word-break:break-all}
+.dshm-cloud-empty{font-size:12.5px;color:var(--dsw-alias-label-tertiary,#9a9aa0);padding:6px 0 2px}
 /* 提醒态：2px 琥珀描边 + 柔光，确保任何主题下都能一眼识别 */
 .dshm-ball.alert{border-color:var(--dsw-static-amber-400,#F79D31);
   box-shadow:0 0 0 3px rgba(247,173,49,.25),0 4px 16px rgba(0,0,0,.35)}
@@ -775,14 +785,23 @@ function ensureStyle() {
 .dshm-playbill-verdict{font-size:11px;color:var(--dsw-alias-label-secondary,inherit)}
 .dshm-playbill-verdict.is-failed{color:var(--dsw-static-amber-400,#F79D31)}
 .dshm-playbill-verdict.is-live{color:var(--dsw-alias-label-tertiary,inherit)}
+/* 工具行故事线选择器：按安装版（0.2.2-rc.1）实测的模型选择菜单配方对齐——
+   trigger=28px/8px 圆角/13px·400/secondary；菜单卡=无边框+16px 圆角+4px 内衬+
+   surface token 底+shadow-lv3+240px 宽；条目=34px 行/12px 圆角/13px·400，
+   选中=interactive-bg-hover 填充+尾随 ✓（optionActive 同款填充） */
 .dshm-story-quick{position:relative;display:inline-flex}
-.dshm-story-quick-btn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));background:none;cursor:pointer;font-size:12px;line-height:1;color:var(--dsw-alias-label-secondary,inherit)}
-.dshm-story-quick-btn:hover{background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.06));color:var(--dsw-alias-label-primary,inherit)}
-.dshm-story-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:264px;display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#353538);border:1px solid var(--dsw-alias-border-l3,rgba(255,255,255,.08));box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:40}
-.dshm-story-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}
-.dshm-story-pop-item{text-align:left;border:none;background:none;cursor:pointer;padding:6px 8px;border-radius:8px;font-size:12px;color:var(--dsw-alias-label-primary,inherit)}
-.dshm-story-pop-item:hover{background:var(--dsw-alias-bg-layer-2,#2c2c2e)}
-.dshm-story-pop-item.is-on{color:var(--dsw-alias-brand-primary,inherit);font-weight:600}
+.dshm-story-quick-btn{display:flex;align-items:center;gap:4px;min-width:0;max-width:220px;height:28px;padding:0 4px 0 8px;border:none;border-radius:8px;outline:none;background:transparent;cursor:pointer;font-size:13px;line-height:20px;font-weight:400;color:var(--dsw-alias-label-secondary,inherit)}
+.dshm-story-quick-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.dshm-story-quick-btn:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3,rgba(255,255,255,.2))}
+.dshm-story-quick-btn>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshm-story-pop{position:absolute;bottom:calc(100% + 8px);left:0;z-index:1100;display:flex;flex-direction:column;width:min(240px,calc(100vw - 32px));max-height:min(360px,calc(100vh - 96px));overflow:hidden;padding:4px;border:none;border-radius:16px;background:var(--dsw-specific-menu,rgba(252,253,254,.7));backdrop-filter:blur(40px) saturate(1.5);box-shadow:rgba(0,0,0,.04) 0 0 0 .5px,rgba(0,0,0,.04) 0 3px 8px,rgba(0,0,0,.05) 0 0 20px;color:var(--dsw-alias-label-primary,inherit)}
+.dshm-story-pop-title{position:sticky;top:0;z-index:1;padding:5px 8px 3px;background:var(--dsw-specific-menu,rgba(252,253,254,.7));color:var(--dsw-alias-label-tertiary,inherit);font-size:12px;line-height:18px;font-weight:500}
+.dshm-story-pop-status{padding:10px;color:var(--dsw-alias-label-tertiary,inherit);font-size:13px;line-height:20px}
+.dshm-story-pop-item{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:5px 7px;border:none;border-radius:12px;outline:none;background:transparent;cursor:pointer;text-align:left;color:inherit;font-size:13px;line-height:20px;font-weight:400}
+.dshm-story-pop-item:hover:not(:disabled),.dshm-story-pop-item.is-on{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.dshm-story-pop-item:disabled{color:var(--dsw-alias-label-dimmed,inherit);cursor:default}
+.dshm-story-pop-item>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshm-story-pop-check{flex:0 0 18px;display:grid;place-items:center;color:var(--dsw-alias-label-primary,inherit)}
 .dshm-note-tag{font-size:10px;color:var(--dsw-alias-label-tertiary,#61666B)}
 .dshm-note-tag.on{color:var(--dsw-static-amber-400,#F79D31)}
 /* 连接状态：常驻徽标（连通性=list 拉取成功的真实信号，非仅"已保存"） */
@@ -2877,15 +2896,20 @@ function StoryQuickButton() {
   };
   // 弹层主体三分支：加载中/空库/列表（从 return 里抽出，避免嵌套三元）
   const popBody = () => {
-    if (loadState === 'failed') return h('span', { className: 'dshm-hint' }, '读取失败，重开重试');
-    if (loadState === 'loading' || state === null) return h('span', { className: 'dshm-hint' }, '读取中…');
-    if (tpls.length === 0) return h('span', { className: 'dshm-hint' }, '暂无故事线（去设置 · 故事线新建）');
+    if (loadState === 'failed') return h('span', { className: 'dshm-story-pop-status' }, '读取失败，重开重试');
+    if (loadState === 'loading' || state === null) return h('span', { className: 'dshm-story-pop-status' }, '读取中…');
+    if (tpls.length === 0) return h('span', { className: 'dshm-story-pop-status' }, '暂无故事线（去设置 · 故事线新建）');
     return tpls.map((tpl) => h('button', {
       key: tpl.id,
       className: tpl.id === state.selectedTemplateId ? 'dshm-story-pop-item is-on' : 'dshm-story-pop-item',
       disabled: busy,
       onClick: () => pick(tpl),
-    }, `${tpl.name}${tpl.id === state.selectedTemplateId ? ' ✓' : ''}`));
+    },
+      h('span', null, tpl.name),
+      // 选中标记=尾随 ✓（选中行另有 interactive 填充，见 CSS .is-on）
+      tpl.id === state.selectedTemplateId
+        ? h('span', { className: 'dshm-story-pop-check' }, '✓')
+        : null));
   };
   return h('span', { className: 'dshm-story-quick' },
     h('button', {
@@ -2915,7 +2939,9 @@ function SyncModule() {
   // 所以"测试并查看云端"不需要先点保存连接
   const [conn, setConn] = useState({ server: '', username: '', password: '', remotePath: '' });
   const [configured, setConfigured] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // 正在跑的动作（null=空闲）：各按钮只在"自己的动作"跑时换文案，
+  // 共用一个布尔会让"查看云端"把上传按钮也翻成"同步中…"——看着像在自动上传
+  const [busyAction, setBusyAction] = useState(null);
   const [msg, setMsg] = useState(null);
   // peek 结果：{empty:true} 或云端摘要（下载前确认覆盖用）
   const [cloud, setCloud] = useState(null);
@@ -2931,13 +2957,13 @@ function SyncModule() {
     return () => { stopped = true; };
   }, []);
 
-  const run = async (label, action) => {
-    setBusy(true); setMsg(null);
+  const run = async (id, label, action) => {
+    setBusyAction(id); setMsg(null);
     try {
       await action();
     } catch (e) {
       setMsg({ ok: false, text: `${label}失败：${e?.message ?? e}` });
-    } finally { setBusy(false); }
+    } finally { setBusyAction(null); }
   };
 
   // 动作前先把表单落盘：peek/上传/下载用的都是已保存的连接，
@@ -2947,19 +2973,19 @@ function SyncModule() {
     setConfigured(true);
   };
 
-  const saveConn = () => run('保存连接', async () => {
+  const saveConn = () => run('save', '保存连接', async () => {
     await persistConn();
     setMsg({ ok: true, text: '连接已保存' });
   });
 
-  const peek = () => run('查看云端', async () => {
+  const peek = () => run('peek', '查看云端', async () => {
     await persistConn();
     const view = await postJson(ROUTE.syncPeek, {});
     setCloud(view);
     if (view?.empty) setMsg({ ok: true, text: '连接成功：云端还没有配置（先从某台机器上传）' });
   });
 
-  const upload = () => run('上传', async () => {
+  const upload = () => run('upload', '上传', async () => {
     await persistConn();
     const r = await postJson(ROUTE.syncUpload, {});
     setMsg({ ok: true, text: `已上传到云端（${Math.round((r?.bytes ?? 0) / 1024)} KB · ${new Date(r?.uploadedAt ?? Date.now()).toLocaleString()}）` });
@@ -2967,7 +2993,7 @@ function SyncModule() {
     setCloud(await postJson(ROUTE.syncPeek, {}).catch(() => null));
   });
 
-  const download = () => run('下载', async () => {
+  const download = () => run('download', '下载', async () => {
     await persistConn();
     const r = await postJson(ROUTE.syncDownload, {});
     const parts = [];
@@ -2981,18 +3007,34 @@ function SyncModule() {
     fetchState(true).catch(() => {});
   });
 
+  // 云端摘要卡：独立的 .dshm-cloud 系列样式（不复用问诊卡 .dshm-card——
+  // 那套为 340px 大头像调的宽度约束不适合设置页内的摘要）
   const cloudSummary = () => {
     if (cloud === null) return null;
-    if (cloud.empty) return h('div', { className: 'dshm-empty' }, '云端为空');
+    if (cloud.empty) {
+      return h('div', { className: 'dshm-cloud' },
+        h('div', { className: 'dshm-cloud-title' }, '☁ 云端'),
+        h('div', { className: 'dshm-cloud-empty' }, '云端为空——还没有机器上传过配置'));
+    }
     const rulesText = cloud.rules.length > 0 ? cloud.rules.map((r) => r.name || r.id).join('、') : '无';
-    const nText = cloud.narratives === null ? '（上传机上没有）' : `${cloud.narratives.templates.length} 条${cloud.narratives.templates.length > 0 ? `：${cloud.narratives.templates.map((t) => t.name || t.id).join('、')}` : ''}`;
-    const aText = cloud.appearance === null ? '（上传机上没有）' : `背景${cloud.appearance.hasBackground ? `有${cloud.appearance.backgroundEnabled ? '（开）' : '（关）'}` : '无'} · 接待员 ${cloud.appearance.hostCount} 位`;
-    return h('div', { className: 'dshm-card' },
-      h('div', { className: 'dshm-card-head' }, `云端配置 · ${new Date(cloud.uploadedAt).toLocaleString()} · 来自 ${cloud.machine}`),
-      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '提醒规则'), h('span', { className: 'dshm-card-v' }, `${cloud.rules.length} 条：${rulesText}${cloud.ruleDeletedCount > 0 ? `（另有 ${cloud.ruleDeletedCount} 条删除记录）` : ''}`)),
-      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '外观'), h('span', { className: 'dshm-card-v' }, aText)),
-      h('div', { className: 'dshm-card-row' }, h('span', { className: 'dshm-card-k' }, '故事线'), h('span', { className: 'dshm-card-v' }, nText)));
+    const nText = cloud.narratives === null ? '上传机上没有' : `${cloud.narratives.templates.length} 条${cloud.narratives.templates.length > 0 ? `：${cloud.narratives.templates.map((t) => t.name || t.id).join('、')}` : ''}`;
+    const aText = cloud.appearance === null ? '上传机上没有' : `背景${cloud.appearance.hasBackground ? `有${cloud.appearance.backgroundEnabled ? '（开）' : '（关）'}` : '无'} · 接待员 ${cloud.appearance.hostCount} 位`;
+    const sec = (k, v) => h('div', { className: 'dshm-cloud-sec' },
+      h('span', { className: 'dshm-cloud-sec-k' }, k),
+      h('span', { className: 'dshm-cloud-sec-v' }, v));
+    return h('div', { className: 'dshm-cloud' },
+      h('div', { className: 'dshm-cloud-title' }, '☁ 云端配置'),
+      h('div', { className: 'dshm-cloud-meta' }, `${new Date(cloud.uploadedAt).toLocaleString()} · 来自 ${cloud.machine}`),
+      sec('提醒规则', `${cloud.rules.length} 条${cloud.ruleDeletedCount > 0 ? ` · 另有 ${cloud.ruleDeletedCount} 条删除记录` : ''}`),
+      sec('规则名单', rulesText),
+      sec('外观', aText),
+      sec('故事线', nText));
   };
+
+  // 下载按钮三态文案：下载中 > 待确认 > 常态（拆平避免嵌套三元）
+  let dlLabel = '下载覆盖本机';
+  if (busyAction === 'download') dlLabel = '下载中…';
+  else if (armed) dlLabel = '确认覆盖本机？';
 
   return h('div', null,
     h('p', { className: 'dshm-hint' }, '把提醒规则、外观、故事线打包上传到 WebDAV（坚果云等），另一台机器下载即用，不用再拷数据文件。'),
@@ -3008,8 +3050,8 @@ function SyncModule() {
         h('input', { className: 'dshm-input', value: conn.remotePath, onChange: (e) => setConn((c) => ({ ...c, remotePath: e.target.value })), placeholder: '/dsh-maze/config.json' })),
       h('div', { className: 'dshm-editor-actions' },
         msg !== null ? h('span', { className: 'dshm-hint', style: { color: msg.ok ? 'var(--dsw-alias-label-secondary,inherit)' : '#d54541' } }, msg.text) : h('span', null),
-        h('button', { className: 'dshm-btn dshm-btn-ghost', disabled: busy, onClick: peek }, '测试并查看云端'),
-        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy, onClick: saveConn }, '保存连接')),
+        h('button', { className: 'dshm-btn dshm-btn-ghost', disabled: busyAction !== null, onClick: peek }, busyAction === 'peek' ? '查看中…' : '测试并查看云端'),
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busyAction !== null, onClick: saveConn }, busyAction === 'save' ? '保存中…' : '保存连接')),
       h('span', { className: 'dshm-hint' }, '应用密码是坚果云「安全选项→添加应用密码」生成的 WebDAV 专用密码（可单独吊销）；连接信息以明文存于本机插件数据目录（仅本机用户可读）。')),
     cloudSummary(),
     h('div', { className: 'dshm-editor', style: { marginTop: '10px' } },
@@ -3017,8 +3059,8 @@ function SyncModule() {
         h('span', { className: 'dshm-hint', style: { marginTop: '0' } }, '冲突策略 last-write-wins：下载会整体覆盖本机三份配置（故事线运行轨迹与小记不进同步包），覆盖前先看上面的云端摘要。')),
       h('div', { className: 'dshm-editor-actions' },
         h('span', null),
-        h('button', { className: `dshm-btn ${armed ? 'dshm-line-del-armed' : 'dshm-btn-ghost'}`, disabled: busy || !configured, onClick: armed ? download : (e) => { e.stopPropagation(); setArmed(true); } }, armed ? '确认覆盖本机？' : '下载覆盖本机'),
-        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busy || !configured, onClick: upload }, busy ? '同步中…' : '上传本机配置'))));
+        h('button', { className: `dshm-btn ${armed ? 'dshm-line-del-armed' : 'dshm-btn-ghost'}`, disabled: busyAction !== null || !configured, onClick: armed ? download : (e) => { e.stopPropagation(); setArmed(true); } }, dlLabel),
+        h('button', { className: 'dshm-btn dshm-btn-primary', disabled: busyAction !== null || !configured, onClick: upload }, busyAction === 'upload' ? '上传中…' : '上传本机配置'))));
 }
 
 const MODULES = [
